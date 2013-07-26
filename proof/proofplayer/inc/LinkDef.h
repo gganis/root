@@ -49,4 +49,7 @@
 
 #pragma link C++ class TOutputListSelectorDataMap+;
 
+#pragma link C++ class SelectorArgs;
+#pragma link C++ class ProofMerger;
+
 #endif

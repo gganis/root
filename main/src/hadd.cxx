@@ -1,66 +1,7 @@
-/*
-
-  This program will add histograms (see note) and Trees from a list of root files and write them
-  to a target root file. The target file is newly created and must not be
-  identical to one of the source files.
-
-  Syntax:
-
-       hadd targetfile source1 source2 ...
-    or
-       hadd -f targetfile source1 source2 ...
-         (targetfile is overwritten if it exists)
-
-  When -the -f option is specified, one can also specify the compression
-  level of the target file. By default the compression level is 1, but
-  if "-f0" is specified, the target file will not be compressed.
-  if "-f6" is specified, the compression level 6 will be used.
-
-  For example assume 3 files f1, f2, f3 containing histograms hn and Trees Tn
-    f1 with h1 h2 h3 T1
-    f2 with h1 h4 T1 T2
-    f3 with h5
-   the result of
-     hadd -f x.root f1.root f2.root f3.root
-   will be a file x.root with h1 h2 h3 h4 h5 T1 T2
-   where h1 will be the sum of the 2 histograms in f1 and f2
-         T1 will be the merge of the Trees in f1 and f2
-
-   The files may contain sub-directories.
-
-  if the source files contains histograms and Trees, one can skip
-  the Trees with
-       hadd -T targetfile source1 source2 ...
-
-  Wildcarding and indirect files are also supported
-    hadd result.root  myfil*.root
-   will merge all files in myfil*.root
-    hadd result.root file1.root @list.txt file2. root myfil*.root
-    will merge file1. root, file2. root, all files in myfil*.root
-    and all files in the indirect text file list.txt ("@" as the first
-    character of the file indicates an indirect file. An indirect file
-    is a text file containing a list of other files, including other
-    indirect files, one line per file).
-
-  If the sources and and target compression levels are identical (default),
-  the program uses the TChain::Merge function with option "fast", ie
-  the merge will be done without  unzipping or unstreaming the baskets
-  (i.e. direct copy of the raw byte on disk). The "fast" mode is typically
-  5 times faster than the mode unzipping and unstreaming the baskets.
-
-  NOTE1: By default histograms are added. However hadd does not support the case where
-         histograms have their bit TH1::kIsAverage set.
-
-  NOTE2: hadd returns a status code: 0 if OK, -1 otherwise
-
-  Authors: Rene Brun, Dirk Geppert, Sven A. Schmidt, sven.schmidt@cern.ch
-         : rewritten from scratch by Rene Brun (30 November 2005)
-            to support files with nested directories.
-           Toby Burnett implemented the possibility to use indirect files.
- */
-
 #include "RConfig.h"
 #include <string>
+#include <iostream>
+#include <fstream>
 #include "TFile.h"
 #include "THashList.h"
 #include "TKey.h"
@@ -68,180 +9,290 @@
 #include "Riostream.h"
 #include "TClass.h"
 #include "TSystem.h"
+#include "TProof.h"
 #include <stdlib.h>
-
 #include "TFileMerger.h"
 #include "TROOT.h"
 #include "TInterpreter.h"
+#include "SelectorArgs.h"
 
-//___________________________________________________________________________
-int main( int argc, char **argv )
+// parameters
+static Bool_t force = kFALSE;
+static Bool_t skip_errors = kFALSE;
+static Bool_t reoptimize = kFALSE;
+static Bool_t noTrees = kFALSE;
+static Bool_t parallel = kFALSE;
+static Bool_t fromFile = kFALSE;
+static Int_t maxopenedfiles = 0;
+static Int_t verbosity = 99;
+static Int_t outputPlace = 0;
+static Int_t ffirst = 2;
+static Int_t newcomp = 1;
+static Int_t numWorkers = -1;
+static Int_t numFiles = 0;
+static const char *targetname = 0;
+static std::vector<std::string> inputFiles;
+
+// check if help argument was passed
+void checkHelp(int argc, char **argv)
 {
+    if ( argc < 3 || "-h" == string(argv[1]) || "--help" == string(argv[1]) ) {
+        std::cout << "Usage: " << argv[0] << "[-p[2-inf]] [-f[0-9]] [-k] [-T] [-O] [-n maxopenedfiles] [-v verbosity] targetfile source1 [source2 source3 ...]" << std::endl;
+        std::cout << "This program will add histograms from a list of root files and write them" << std::endl;
+        std::cout << "to a target root file. The target file is newly created and must not " << std::endl;
+        std::cout << "exist, or if -f (\"force\") is given, must not be one of the source files." << std::endl;
+        std::cout << "Supply at least two source files for this to make sense... ;-)" << std::endl;
+        std::cout << "If the option -p is used, hadd will use a selector with multiple workers to merge files in parallel. The -p option can be followed by the number of workers (for example -p3 for 3 workers). If the number of workers is not given, the selector will choose a default number of workers" << std::endl;
+        std::cout << "If the option -k is used, hadd will not exit on corrupt or non-existant input files but skip the offending files instead." << std::endl;
+        std::cout << "If the option -T is used, Trees are not merged" <<std::endl;
+        std::cout << "If the option -O is used, when merging TTree, the basket size is re-optimized" <<std::endl;
+        std::cout << "If the option -v is used, explicitly set the verbosity level; 0 request no output, 99 is the default" <<std::endl;
+        std::cout << "If the option -n is used, hadd will open at most 'maxopenedfiles' at once, use 0 to request to use the system maximum." << std::endl;
+        std::cout << "When -the -f option is specified, one can also specify the compression" <<std::endl;
+        std::cout << "level of the target file. By default the compression level is 1, but" <<std::endl;
+        std::cout << "if \"-f0\" is specified, the target file will not be compressed." <<std::endl;
+        std::cout << "if \"-f6\" is specified, the compression level 6 will be used." <<std::endl;
+        std::cout << "if Target and source files have different compression levels"<<std::endl;
+        std::cout << " a slower method is used"<<std::endl;
+        exit(1);
+    }
+}
 
-   if ( argc < 3 || "-h" == string(argv[1]) || "--help" == string(argv[1]) ) {
-      cout << "Usage: " << argv[0] << " [-f[0-9]] [-k] [-T] [-O] [-n maxopenedfiles] [-v verbosity] targetfile source1 [source2 source3 ...]" << endl;
-      cout << "This program will add histograms from a list of root files and write them" << endl;
-      cout << "to a target root file. The target file is newly created and must not " << endl;
-      cout << "exist, or if -f (\"force\") is given, must not be one of the source files." << endl;
-      cout << "Supply at least two source files for this to make sense... ;-)" << endl;
-      cout << "If the option -k is used, hadd will not exit on corrupt or non-existant input files but skip the offending files instead." << endl;
-      cout << "If the option -T is used, Trees are not merged" <<endl;
-      cout << "If the option -O is used, when merging TTree, the basket size is re-optimized" <<endl;
-      cout << "If the option -v is used, explicitly set the verbosity level; 0 request no output, 99 is the default" <<endl;
-      cout << "If the option -n is used, hadd will open at most 'maxopenedfiles' at once, use 0 to request to use the system maximum." << endl;
-      cout << "When -the -f option is specified, one can also specify the compression" <<endl;
-      cout << "level of the target file. By default the compression level is 1, but" <<endl;
-      cout << "if \"-f0\" is specified, the target file will not be compressed." <<endl;
-      cout << "if \"-f6\" is specified, the compression level 6 will be used." <<endl;
-      cout << "if Target and source files have different compression levels"<<endl;
-      cout << " a slower method is used"<<endl;
-      return 1;
-   }
 
-   Bool_t force = kFALSE;
-   Bool_t skip_errors = kFALSE;
-   Bool_t reoptimize = kFALSE;
-   Bool_t noTrees = kFALSE;
-   Int_t maxopenedfiles = 0;
-   Int_t verbosity = 99;
-
-   int outputPlace = 0;
-   int ffirst = 2;
-   Int_t newcomp = 1;
-   for( int a = 1; a < argc; ++a ) {
-      if ( strcmp(argv[a],"-T") == 0 ) {
-         noTrees = kTRUE;
-         ++ffirst;
-      } else if ( strcmp(argv[a],"-f") == 0 ) {
-         force = kTRUE;
-         ++ffirst;
-      } else if ( strcmp(argv[a],"-k") == 0 ) {
-         skip_errors = kTRUE;
-         ++ffirst;
-      } else if ( strcmp(argv[a],"-O") == 0 ) {
-         reoptimize = kTRUE;
-         ++ffirst;
-      } else if ( strcmp(argv[a],"-n") == 0 ) {
-         if (a+1 >= argc) {
-            cerr << "Error: no maximum number of opened was provided after -n.\n";
-         } else {
-            Long_t request = strtol(argv[a+1], 0, 10);
-            if (request < kMaxLong && request >= 0) {
-               maxopenedfiles = (Int_t)request;
-               ++a;
-               ++ffirst;
-            } else {
-               cerr << "Error: could not parse the max number of opened file passed after -n: " << argv[a+1] << ". We will use the system maximum.\n";
-            }
-         }
-         ++ffirst;
-      } else if ( strcmp(argv[a],"-v") == 0 ) {
-         if (a+1 >= argc) {
-            cerr << "Error: no verbosity level was provided after -v.\n";
-         } else {
-            Long_t request = strtol(argv[a+1], 0, 10);
-            if (request < kMaxLong && request >= 0) {
-               verbosity = (Int_t)request;
-               ++a;
-               ++ffirst;
-            } else {
-               cerr << "Error: could not parse the verbosity level passed after -v: " << argv[a+1] << ". We will use the default value (99).\n";
-            }
-         }
-         ++ffirst;
-      } else if ( argv[a][0] == '-' ) {
-         char ft[4];
-         for( int j=0; j<=9; ++j ) {
-            snprintf(ft,4,"-f%d",j);
-            if (!strcmp(argv[a],ft)) {
-               force = kTRUE;
-               newcomp = j;
-               ++ffirst;
-               break;
-            }
-         }
-         if (!force) {
-            // Bad argument
-            cerr << "Error: option " << argv[a] << " is not a supported option.\n";
+// check input arguments
+void checkArgs(int argc, char **argv)
+{
+    for( int a = 1; a < argc; ++a ) {
+        if (strcmp(argv[a],"-T") == 0) {
+            noTrees = kTRUE;
             ++ffirst;
-         }
-      } else if (!outputPlace) {
-         outputPlace = a;
-      }
-   }
-
-   gSystem->Load("libTreePlayer");
-   TClass::GetClass("ROOT::Cintex::Cintex"); // autoload Cintex if it exist.
-   if (gInterpreter->IsLoaded("libCintex")) {
-      gROOT->ProcessLine("ROOT::Cintex::Cintex::Enable();");
-   }
-   const char *targetname = 0;
-   if (outputPlace) {
-      targetname = argv[outputPlace];
-   } else {
-      targetname = argv[ffirst-1];
-   }
-      
-   if (verbosity > 1) {
-      cout << "hadd Target file: " << targetname << endl;
-   }
-
-   TFileMerger merger(kFALSE,kFALSE);
-   merger.SetMsgPrefix("hadd");
-   merger.SetPrintLevel(verbosity - 1);
-   if (maxopenedfiles > 0) {
-      merger.SetMaxOpenedFiles(maxopenedfiles);
-   }
-   if (!merger.OutputFile(targetname,force,newcomp) ) {
-      cerr << "hadd error opening target file (does " << argv[ffirst-1] << " exist?)." << endl;
-      cerr << "Pass \"-f\" argument to force re-creation of output file." << endl;
-      exit(1);
-   }
-
-   
-   for ( int i = ffirst; i < argc; i++ ) {
-      if (argv[i] && argv[i][0]=='@') {
-         std::ifstream indirect_file(argv[i]+1);
-         if( ! indirect_file.is_open() ) {
-            std::cerr<< "hadd could not open indirect file " << (argv[i]+1) << std::endl;
-            return 1;
-         }
-         while( indirect_file ){
-            std::string line;
-            if( std::getline(indirect_file, line) && line.length() &&  !merger.AddFile(line.c_str()) ) {
-               return 1;
+        } else if (strcmp(argv[a],"-f") == 0) {
+            force = kTRUE;
+            ++ffirst;
+        } else if (strcmp(argv[a],"-k") == 0) {
+            skip_errors = kTRUE;
+            ++ffirst;
+        } else if (strcmp(argv[a],"-O") == 0) {
+            reoptimize = kTRUE;
+            ++ffirst;
+        } else if (strncmp(argv[a], "-p", 2) == 0) {
+            parallel = kTRUE;
+            ++ffirst;
+            if (strlen(argv[a]) > 2)
+                numWorkers = atoi(argv[a] + 2);
+        } else if (strcmp(argv[a],"-n") == 0) {
+            if (a + 1 >= argc) {
+                std::cerr << "Error: no maximum number of opened was provided after -n.\n";
+            } else {
+                Long_t request = strtol(argv[a+1], 0, 10);
+                if (request < kMaxLong && request >= 0) {
+                    maxopenedfiles = (Int_t)request;
+                    ++a;
+                    ++ffirst;
+                } else {
+                    std::cerr << "Error: could not parse the max number of opened file passed after -n: " << argv[a+1] << ". We will use the system maximum.\n";
+                }
             }
-         }         
-      } else if( ! merger.AddFile(argv[i]) ) {
-         if ( skip_errors ) {
-            cerr << "hadd skipping file with error: " << argv[i] << endl;
-         } else {
-            cerr << "hadd exiting due to error in " << argv[i] << endl;
-            return 1;
-         }
-      }
-   }
-   if (reoptimize) {
-      merger.SetFastMethod(kFALSE);
-   } else {
-      if (merger.HasCompressionChange()) {
-         // Don't warn if the user any request re-optimization.
-         cout <<"hadd Sources and Target have different compression levels"<<endl;
-         cout <<"hadd merging will be slower"<<endl;
-      }
-   }
-   merger.SetNotrees(noTrees);
-   Bool_t status = merger.Merge();
+            ++ffirst;
+        } else if (strcmp(argv[a],"-v") == 0) {
+            if (a+1 >= argc) {
+                std::cerr << "Error: no verbosity level was provided after -v.\n";
+            } else {
+                Long_t request = strtol(argv[a+1], 0, 10);
+                if (request < kMaxLong && request >= 0) {
+                    verbosity = (Int_t)request;
+                    ++a;
+                    ++ffirst;
+                } else {
+                    std::cerr << "Error: could not parse the verbosity level passed after -v: " << argv[a+1] << ". We will use the default value (99).\n";
+                }
+            }
+            ++ffirst;
+        } else if ( argv[a][0] == '-' ) {
+            char ft[4];
+            for( int j=0; j<=9; ++j ) {
+                snprintf(ft,4,"-f%d",j);
+                if (!strcmp(argv[a],ft)) {
+                    force = kTRUE;
+                    newcomp = j;
+                    ++ffirst;
+                    break;
+                }
+            }
+            if (!force) {
+                // Bad argument
+                std::cerr << "Error: option " << argv[a] << " is not a supported option.\n";
+                ++ffirst;
+            }
+        } else if (!outputPlace) {
+            outputPlace = a;
+        }
+    }
+}
 
-   if (status) {
-      if (verbosity == 1) {
-         cout << "hadd merged " << merger.GetMergeList()->GetEntries() << " input files in " << targetname << ".\n";
-      }
-      return 0;
-   } else {
-      if (verbosity == 1) {
-         cout << "hadd failure during the merge of " << merger.GetMergeList()->GetEntries() << " input files in " << targetname << ".\n";
-      }
-      return 1;
-   }
+// load Cintex if it exists
+void loadCintex()
+{
+    gSystem->Load("libTreePlayer");
+    TClass::GetClass("ROOT::Cintex::Cintex"); // autoload Cintex if it exists
+    if (gInterpreter->IsLoaded("libCintex")) {
+        gROOT->ProcessLine("ROOT::Cintex::Cintex::Enable();");
+    }
+}
+
+// set name of output file
+void setTargetName(char **argv)
+{
+    if (outputPlace) {
+        targetname = argv[outputPlace];
+    } else {
+        targetname = argv[ffirst-1];
+    }
+
+    if (verbosity > 1) {
+        std::cout << "hadd Target file: " << targetname << std::endl;
+    }
+}
+
+// read files names from file
+void readFromFile(char *fileName)
+{
+    std::ifstream file;
+    file.open(fileName, ios::in);
+    if (file.is_open()) {
+        while(file.good()) {
+            std::string line;
+            std::getline(file, line);
+            if (line.length() > 0)
+                inputFiles.push_back(line);
+        }
+        file.close();
+    }
+    else {
+        std::cerr << "hadd could not open indirect file " << fileName << std::endl;
+        exit(1);
+    }
+}
+
+// set names of input files
+void setInputFiles(int argc, char**argv)
+{
+    for (Int_t i = ffirst; i < argc; i++) {
+        if (argv[i] && argv[i][0] == '@')
+            readFromFile(argv[i] + 1);
+        else
+            inputFiles.push_back(argv[i]);
+    }
+    numFiles = inputFiles.size();
+}
+
+// merge files in parallel using PROOF TSelector
+void parallelMerge()
+{
+    TProof *p = NULL;
+    if (numWorkers > 0) {
+        TString *workers = new TString();
+        workers -> Form("workers=%d", numWorkers);
+        p = TProof :: Open(workers -> Data());
+    }
+    else
+        p = TProof :: Open("lite://");
+
+    if (!p || !p -> IsValid()) {
+        std::cerr << "Could not start Proof" << std::endl;
+        exit(1);
+    }
+
+    std::vector<std::string> names;
+    std::string currentPath(gSystem -> WorkingDirectory());
+
+    for (Int_t i = 0; i < (Int_t)inputFiles.size(); i++) {
+        if (gSystem -> IsAbsoluteFileName(inputFiles[i].c_str()))
+            names.push_back(inputFiles[i]);
+        else {
+            std::string fileName(gSystem -> ConcatFileName(currentPath.c_str(), inputFiles[i].c_str()));
+            names.push_back(fileName);
+        }
+    }
+
+    SelectorArgs *args = new SelectorArgs(p -> GetParallel(), verbosity,
+                            names.size(), names, currentPath, force, newcomp,
+                            maxopenedfiles, skip_errors, reoptimize, noTrees,
+                            targetname);
+
+    p -> SetParameter("PROOF_PacketizerFixedNum", (Int_t)1);
+    p -> AddInput(args);
+    p -> Process("ProofMerger", p -> GetParallel());
+}
+
+// merge files sequentially
+void sequentialMerge()
+{
+    TFileMerger merger(kFALSE,kFALSE);
+    merger.SetMsgPrefix("hadd");
+    merger.SetPrintLevel(verbosity - 1);
+    if (maxopenedfiles > 0) {
+        merger.SetMaxOpenedFiles(maxopenedfiles);
+    }
+    if (!merger.OutputFile(targetname,force,newcomp) ) {
+        std::cerr << "hadd error opening target file (does " << targetname << " exist?)." << std::endl;
+        std::cerr << "Pass \"-f\" argument to force re-creation of output file." << std::endl;
+        exit(1);
+    }
+
+
+    for (Int_t i = 0; i < (Int_t)inputFiles.size(); i++ ) {
+        if(!merger.AddFile(inputFiles[i].c_str())) {
+            if (skip_errors) {
+                std::cerr << "hadd skipping file with error: " << inputFiles[i].c_str() << std::endl;
+            } else {
+                std::cerr << "hadd exiting due to error in " << inputFiles[i].c_str() << std::endl;
+                exit(1);
+            }
+        }
+    }
+
+    if (reoptimize) {
+        merger.SetFastMethod(kFALSE);
+    } else {
+        if (merger.HasCompressionChange()) {
+            // Don't warn if the user any request re-optimization.
+            std::cout << "hadd Sources and Target have different compression levels" << std::endl;
+            std::cout << "hadd merging will be slower" << std::endl;
+        }
+    }
+    merger.SetNotrees(noTrees);
+    Bool_t status = merger.Merge();
+
+    if (status) {
+        if (verbosity == 1) {
+            std::cout << "hadd merged " << merger.GetMergeList()->GetEntries() << " input files in " << targetname << ".\n";
+        }
+    } else {
+        if (verbosity == 1) {
+            std::cout << "hadd failure during the merge of " << merger.GetMergeList()->GetEntries() << " input files in " << targetname << ".\n";
+        }
+        exit(1);
+    }
+}
+
+// selects the appropriate merge function
+void mergeFiles()
+{
+    if (parallel == kTRUE && numWorkers < numFiles)
+        parallelMerge();
+    else
+        sequentialMerge();
+}
+
+// main function
+int main(int argc, char **argv)
+{
+    checkHelp(argc, argv);     // check for help argument
+    checkArgs(argc, argv);     // check all arguments
+    loadCintex();              // load Cintex if it exists
+    setTargetName(argv);       // set output file name
+    setInputFiles(argc, argv); // set input files names for merging
+    mergeFiles();              // choose merge method and merge
+    return 0;
 }

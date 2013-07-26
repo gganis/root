@@ -79,6 +79,12 @@ HADDS        := $(MODDIRS)/hadd.cxx
 HADDO        := $(call stripsrc,$(HADDS:.cxx=.o))
 HADDDEP      := $(HADDO:.o=.d)
 HADD         := bin/hadd$(EXEEXT)
+ifneq ($(PROOFLIB),)
+ifneq ($(PLATFORM),win32)
+HADDPROOFLIBS := -lProof -lProofPlayer 
+HADDPROOFLIBSDEP = $(PROOFLIB) $(PROOFPLAYERLIB)
+endif
+endif
 
 ##### h2root #####
 H2ROOTS1     := $(MODDIRS)/h2root.cxx
@@ -156,9 +162,9 @@ $(ROOTSSH):     $(call stripsrc,$(MAINDIRS)/roots.sh)
 		@cp $< $@
 		@chmod 0755 $@
 
-$(HADD):        $(HADDO) $(ROOTLIBSDEP)
+$(HADD):        $(HADDO) $(ROOTLIBSDEP) $(HADDPROOFLIBSDEP) 
 		$(LD) $(LDFLAGS) -o $@ $(HADDO) $(ROOTULIBS) \
-		   $(RPATH) $(ROOTLIBS) $(SYSLIBS)
+		   $(RPATH) $(ROOTLIBS) $(HADDPROOFLIBS) $(SYSLIBS)
 
 $(SSH2RPD):     $(SSH2RPDO) $(SNPRINTFO) $(STRLCPYO)
 		$(LD) $(LDFLAGS) -o $@ $(SSH2RPDO) $(SNPRINTFO) $(STRLCPYO) \
