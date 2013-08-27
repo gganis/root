@@ -1621,6 +1621,23 @@ Bool_t TCling::IsLoaded(const char* filename) const
        && fileMap.count(sFilename.Data())) {
       return kTRUE;
    }
+
+   const clang::DirectoryLookup *CurDir;
+   llvm::StringRef srName(filename);
+   clang::Preprocessor &PP = fInterpreter->getCI()->getPreprocessor();
+   if (PP.getCurrentFileLexer() == 0) return kFALSE;
+   const clang::FileEntry *FE = PP.LookupFile(srName, /*isAngled*/ false,
+                                              /*FromDir*/ 0, CurDir,
+                                              /*CurFileEnt*/ 0,
+                                              /*SearchPath*/ 0,
+                                              /*RelativePath*/ 0,
+                                              /*SkipCache*/ false);
+   if (FE) {
+      // check in the source manager if the file is actually loaded
+      clang::SourceManager &SM = fInterpreter->getCI()->getSourceManager();
+      clang::FileID FID = SM.translateFile(FE);
+      if (!FID.isInvalid()) return kTRUE;
+   }
    return kFALSE;
 }
 
@@ -2511,7 +2528,7 @@ TClass *TCling::GenerateTClass(ClassInfo_t *classinfo, Bool_t silent /* = kFALSE
    // Generate a TClass for the given class.
 
    TClingClassInfo *info = (TClingClassInfo*)classinfo;
-   if (!info && !info->IsValid()) {
+   if (!info || !info->IsValid()) {
       Fatal("GenerateTClass","Requires a valid ClassInfo object");
       return 0;
    }
@@ -4055,6 +4072,34 @@ void TCling::CallFunc_SetFuncProto(CallFunc_t* func, ClassInfo_t* info, const ch
 }
 
 //______________________________________________________________________________
+void TCling::CallFunc_SetFuncProto(CallFunc_t* func, ClassInfo_t* info, const char* method, const std::vector<TypeInfo_t*> &proto, Long_t* offset, EFunctionMatchMode mode /* = kConversionMatch */) const
+{
+   // Interface to cling function
+   TClingCallFunc* f = (TClingCallFunc*) func;
+   TClingClassInfo* ci = (TClingClassInfo*) info;
+   llvm::SmallVector<clang::QualType, 4> funcProto;
+   for (std::vector<TypeInfo_t*>::const_iterator iter = proto.begin(), end = proto.end();
+        iter != end; ++iter) {
+      funcProto.push_back( ((TClingTypeInfo*)(*iter))->GetQualType() );
+   }
+   f->SetFuncProto(ci, method, funcProto, offset, mode);
+}
+
+//______________________________________________________________________________
+void TCling::CallFunc_SetFuncProto(CallFunc_t* func, ClassInfo_t* info, const char* method, const std::vector<TypeInfo_t*> &proto, bool objectIsConst, Long_t* offset, EFunctionMatchMode mode /* = kConversionMatch */) const
+{
+   // Interface to cling function
+   TClingCallFunc* f = (TClingCallFunc*) func;
+   TClingClassInfo* ci = (TClingClassInfo*) info;
+   llvm::SmallVector<clang::QualType, 4> funcProto;
+   for (std::vector<TypeInfo_t*>::const_iterator iter = proto.begin(), end = proto.end();
+        iter != end; ++iter) {
+      funcProto.push_back( ((TClingTypeInfo*)(*iter))->GetQualType() );
+   }
+   f->SetFuncProto(ci, method, funcProto, objectIsConst, offset, mode);
+}
+
+//______________________________________________________________________________
 //
 //  ClassInfo interface
 //
@@ -4752,6 +4797,12 @@ void TCling::TypeInfo_Delete(TypeInfo_t* tinfo) const
 TypeInfo_t* TCling::TypeInfo_Factory() const
 {
    return (TypeInfo_t*) new TClingTypeInfo(fInterpreter);
+}
+
+//______________________________________________________________________________
+TypeInfo_t* TCling::TypeInfo_Factory(const char *name) const
+{
+   return (TypeInfo_t*) new TClingTypeInfo(fInterpreter, name);
 }
 
 //______________________________________________________________________________
