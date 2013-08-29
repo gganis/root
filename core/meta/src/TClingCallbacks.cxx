@@ -41,7 +41,6 @@ extern "C" {
    Decl* TCling__GetObjectDecl(TObject *obj);
    int TCling__AutoLoadCallback(const char* className);
    int TCling__IsAutoLoadNamespaceCandidate(const char* name);
-   void TCling__UpdateListsOnDeclDeserialized(const clang::Decl*);
    int TCling__CompileMacro(const char *fileName, const char *options);
    void TCling__SplitAclicMode(const char* fileName, std::string &mode,
                   std::string &args, std::string &io, std::string &fname);
@@ -530,7 +529,7 @@ bool TClingCallbacks::tryInjectImplicitAutoKeyword(LookupResult &R, Scope *S) {
    return false;
 }
 
-void TClingCallbacks::Initialize(const ASTContext& Ctx) {
+void TClingCallbacks::Initialize(ASTContext& Ctx) {
    // Replay existing decls from the AST.
    if (fFirstRun) {
       // Before setting up the callbacks register what cling have seen during init.
@@ -550,7 +549,7 @@ void TClingCallbacks::TransactionCommitted(const Transaction &T) {
    //if (!T.size())
    //   return;
    if (fFirstRun && T.size())
-      Initialize(T.getASTContext());
+      Initialize(const_cast<clang::ASTContext&>(T.getASTContext()));
 
    TCling__UpdateListsOnCommitted(T, m_Interpreter);
 }
@@ -565,5 +564,4 @@ void TClingCallbacks::TransactionUnloaded(const Transaction &T) {
 }
 
 void TClingCallbacks::DeclDeserialized(const clang::Decl* D) {
-   TCling__UpdateListsOnDeclDeserialized(D);
 }

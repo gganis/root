@@ -17,17 +17,17 @@ using namespace clang;
 
 namespace cling {
 
-  Transaction::Transaction(const ASTContext& C) : m_ASTContext(C) {
+  Transaction::Transaction(ASTContext& C) : m_ASTContext(C) {
     Initialize(C);
   }
 
-  Transaction::Transaction(const CompilationOptions& Opts, const ASTContext& C)
+  Transaction::Transaction(const CompilationOptions& Opts, ASTContext& C)
     : m_ASTContext(C) {
     Initialize(C);
     m_Opts = Opts; // intentional copy.
   }
 
-  void Transaction::Initialize(const ASTContext& C) {
+  void Transaction::Initialize(ASTContext& C) {
     m_NestedTransactions.reset(0);
     m_Parent = 0; 
     m_State = kCollecting;
@@ -183,25 +183,55 @@ namespace cling {
     m_DeclQueue.erase(decls_begin() + pos);
   }
 
-  void Transaction::dump() const {
-    if (!size())
-      return;
+  void Transaction::DelayCallInfo::dump() const {
+    PrintingPolicy Policy((LangOptions()));
+    print(llvm::errs(), Policy, /*Indent*/0, /*PrintInstantiation*/true);
+  }
 
-    ASTContext& C = getFirstDecl().getSingleDecl()->getASTContext();
+  void Transaction::DelayCallInfo::print(llvm::raw_ostream& Out, 
+                                         const PrintingPolicy& Policy,
+                                         unsigned Indent, 
+                                         bool PrintInstantiation, 
+                                    llvm::StringRef prependInfo /*=""*/) const {
+    static const char* const stateNames[Transaction::kCCINumStates] = {
+      "kCCINone",
+      "kCCIHandleTopLevelDecl",
+      "kCCIHandleInterestingDecl",
+      "kCCIHandleTagDeclDefinition",
+      "kCCIHandleVTable",
+      "kCCIHandleCXXImplicitFunctionInstantiation",
+      "kCCIHandleCXXStaticMemberVarInstantiation",
+    };
+    assert((sizeof(stateNames) /sizeof(void*)) == Transaction::kCCINumStates 
+           && "Missing states?");
+    if (!prependInfo.empty()) {
+      Out.changeColor(llvm::raw_ostream::RED);
+      Out << prependInfo;
+      Out.resetColor();
+      Out << ", ";
+    }
+    Out.changeColor(llvm::raw_ostream::BLUE);
+    Out << stateNames[m_Call]; 
+    Out.changeColor(llvm::raw_ostream::GREEN);
+    Out << " <- ";
+    Out.resetColor();
+    for (DeclGroupRef::const_iterator I = m_DGR.begin(), E = m_DGR.end(); 
+         I != E; ++I)
+        if (*I)
+          (*I)->print(Out, Policy, Indent, PrintInstantiation);
+        else
+          Out << "<<NULL DECL>>";
+  }
+
+  void Transaction::dump() const {
+    const ASTContext& C = getASTContext();
     PrintingPolicy Policy = C.getPrintingPolicy();
     print(llvm::errs(), Policy, /*Indent*/0, /*PrintInstantiation*/true);
   }
 
   void Transaction::dumpPretty() const {
-    if (!size())
-      return;
-    ASTContext* C = 0;
-    if (m_WrapperFD)
-      C = &(m_WrapperFD->getASTContext());
-    if (!getFirstDecl().isNull())
-      C = &(getFirstDecl().getSingleDecl()->getASTContext());
-      
-    PrintingPolicy Policy(C->getLangOpts());
+    const ASTContext& C = getASTContext();      
+    PrintingPolicy Policy(C.getLangOpts());
     print(llvm::errs(), Policy, /*Indent*/0, /*PrintInstantiation*/true);
   }
 
@@ -223,12 +253,15 @@ namespace cling {
         Out<<"          End Transaction" << nestedT << "            \n";
         Out<<"+====================================================+\n";
       }
-      for (DeclGroupRef::const_iterator J = I->m_DGR.begin(), 
-             L = I->m_DGR.end(); J != L; ++J)
-        if (*J)
-          (*J)->print(Out, Policy, Indent, PrintInstantiation);
-        else
-          Out << "<<NULL DECL>>";
+      I->print(Out, Policy, Indent, PrintInstantiation);
+    }
+
+    // Print the deserialized decls if any.
+    for (const_iterator I = deserialized_decls_begin(), 
+           E = deserialized_decls_end(); I != E; ++I) {
+      
+      assert(!I->m_DGR.isNull() && "Must not contain null DGR.");
+      I->print(Out, Policy, Indent, PrintInstantiation, "Deserialized");
     }
   }
 
@@ -240,6 +273,8 @@ namespace cling {
       "RolledBackWithErrors",
       "Committed"
     };
+    assert((sizeof(stateNames) / sizeof(void*)) == kNumStates 
+           && "Missing a state to print.");
     std::string indent(nindent, ' ');
     llvm::errs() << indent << "Transaction @" << this << ": \n";
     for (const_nested_iterator I = nested_begin(), E = nested_end(); 

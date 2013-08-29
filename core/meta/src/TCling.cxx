@@ -385,19 +385,6 @@ void TCling::HandleNewDecl(const void* DV, bool isDeserialized, std::set<TClass*
 }
 
 extern "C"
-void TCling__UpdateListsOnDeclDeserialized(const clang::Decl* D) {
-   // We cache them because the decls and their types might not have
-   // been completely deserialized; we push them into root/meta once
-   // the transaction is done.
-   if ((D->getDeclContext() && !isa<TagDecl>(D->getDeclContext())) &&
-       (isa<NamespaceDecl>(D) || isa<FunctionDecl>(D)
-        || (isa<VarDecl>(D) && !isa<ParmVarDecl>(D))
-        || isa<TagDecl>(D) || isa<TypedefDecl>(D))) {
-      ((TCling*)gCling)->AddDeserializedDecl(D);
-   }
-}
-
-extern "C"
 void TCling__UpdateListsOnCommitted(const cling::Transaction &T, 
                                     cling::Interpreter* interp) {
 
@@ -445,17 +432,17 @@ void TCling__UpdateListsOnCommitted(const cling::Transaction &T,
 
    // The above might trigger more decls to be deserialized.
    // Thus the iteration over the deserialized decls must be last.
-   std::vector<const void*> DeserDecls;
-   // HandleNewDecl() might cause a transaction; prevent it from handling
-   // our DeserDecls.
-   DeserDecls.swap(((TCling*)gCling)->GetDeserializedDecls());
-   if (!DeserDecls.empty()) {
-      for (size_t i = 0; i < DeserDecls.size(); ++i) {
-         if (TransactionDeclSet.find(DeserDecls[i])
-             == TransactionDeclSet.end())
-            ((TCling*)gCling)->HandleNewDecl(DeserDecls[i], true, modifiedTClasses);
-      }
+   for (cling::Transaction::const_iterator I = T.deserialized_decls_begin(), 
+           E = T.deserialized_decls_end(); I != E; ++I) {
+      for (DeclGroupRef::const_iterator DI = I->m_DGR.begin(),
+              DE = I->m_DGR.end(); DI != DE; ++DI)
+         if (TransactionDeclSet.find(*DI) == TransactionDeclSet.end()) {
+            //FIXME: HandleNewDecl should take DeclGroupRef
+            ((TCling*)gCling)->HandleNewDecl(*DI, /*isDeserialized*/true, 
+                                             modifiedTClasses);
+         }
    }
+
 
    // When fully building the reflection info in TClass, a deserialization
    // could be triggered, which may result in request for building the 
@@ -1625,21 +1612,28 @@ Bool_t TCling::IsLoaded(const char* filename) const
       return kTRUE;
    }
 
-   const clang::DirectoryLookup *CurDir;
-   llvm::StringRef srName(filename);
+   const clang::DirectoryLookup *CurDir = 0;
    clang::Preprocessor &PP = fInterpreter->getCI()->getPreprocessor();
-   if (PP.getCurrentFileLexer() == 0) return kFALSE;
-   const clang::FileEntry *FE = PP.LookupFile(srName, /*isAngled*/ false,
+   clang::HeaderSearch &HS = PP.getHeaderSearchInfo();
+   const clang::FileEntry *FE = HS.LookupFile(filename, /*isAngled*/ false,
                                               /*FromDir*/ 0, CurDir,
                                               /*CurFileEnt*/ 0,
                                               /*SearchPath*/ 0,
                                               /*RelativePath*/ 0,
+                                              /*SuggestedModule*/ 0,
                                               /*SkipCache*/ false);
    if (FE) {
       // check in the source manager if the file is actually loaded
       clang::SourceManager &SM = fInterpreter->getCI()->getSourceManager();
+      // this works only with header (and source) files...
       clang::FileID FID = SM.translateFile(FE);
       if (!FID.isInvalid()) return kTRUE;
+      // ...then check shared library again, but with full path now
+      sFilename = FE->getName();
+      if (gSystem->FindDynamicLibrary(sFilename, kTRUE)
+          && fileMap.count(sFilename.Data())) {
+         return kTRUE;
+      }
    }
    return kFALSE;
 }

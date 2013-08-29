@@ -11,8 +11,9 @@
 
 #include "clang/AST/DeclGroup.h"
 
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/OwningPtr.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringRef.h"
 
 namespace clang {
   class ASTContext;
@@ -45,7 +46,8 @@ namespace cling {
       kCCIHandleTagDeclDefinition,
       kCCIHandleVTable,
       kCCIHandleCXXImplicitFunctionInstantiation,
-      kCCIHandleCXXStaticMemberVarInstantiation
+      kCCIHandleCXXStaticMemberVarInstantiation,
+      kCCINumStates
     };
 
     ///\brief Each declaration group came through different interface at 
@@ -64,6 +66,10 @@ namespace cling {
       inline bool operator!=(const DelayCallInfo& rhs) {
         return !operator==(rhs);
       }
+      void dump() const;
+      void print(llvm::raw_ostream& Out, const clang::PrintingPolicy& Policy,
+                 unsigned Indent, bool PrintInstantiation, 
+                 llvm::StringRef prependInfo = "") const;
     };
 
   private:
@@ -118,14 +124,14 @@ namespace cling {
 
     ///\brief The ASTContext
     ///
-    const clang::ASTContext& m_ASTContext;
+    clang::ASTContext& m_ASTContext;
 
   public:
 
-    Transaction(const clang::ASTContext& C);
-    Transaction(const CompilationOptions& Opts, const clang::ASTContext& C);
+    Transaction(clang::ASTContext& C);
+    Transaction(const CompilationOptions& Opts, clang::ASTContext& C);
 
-    void Initialize(const clang::ASTContext& C);
+    void Initialize(clang::ASTContext& C);
 
     ~Transaction();
 
@@ -365,9 +371,11 @@ namespace cling {
     void setNext(Transaction* T) { m_Next = T; }
 
     clang::ASTContext& getASTContext() { 
-      return const_cast<clang::ASTContext&>(m_ASTContext);
+      return m_ASTContext;
     }
-    const clang::ASTContext& getASTContext() const { return m_ASTContext; }
+    const clang::ASTContext& getASTContext() const {
+      return m_ASTContext;
+    }
 
     ///\brief Erases an element at given position.
     ///

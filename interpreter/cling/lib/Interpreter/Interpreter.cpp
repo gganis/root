@@ -102,7 +102,7 @@ namespace cling {
   }
 #endif
 
-  Interpreter::PushTransactionRAII::PushTransactionRAII(Interpreter* i)
+  Interpreter::PushTransactionRAII::PushTransactionRAII(const Interpreter* i)
     : m_Interpreter(i) {
     CompilationOptions CO;
     CO.DeclarationExtraction = 0;
@@ -120,7 +120,7 @@ namespace cling {
     pop();
   }
 
-  void Interpreter::PushTransactionRAII::pop() {
+  void Interpreter::PushTransactionRAII::pop() const {
     if (Transaction* T 
         = m_Interpreter->m_IncrParser->endTransaction(m_Transaction)) {
       assert(T == m_Transaction && "Ended different transaction?");
@@ -302,7 +302,7 @@ namespace cling {
     }
   }
 
- void Interpreter::storeInterpreterState(const std::string& name) const {
+  void Interpreter::storeInterpreterState(const std::string& name) const {
     ASTContext& C = getSema().getASTContext();
     TranslationUnitDecl* TU = C.getTranslationUnitDecl();
     unsigned Indentation = 0;
@@ -328,10 +328,12 @@ namespace cling {
     std::ofstream ofs (Filename.c_str(), std::ofstream::out);  
     llvm::raw_os_ostream Out(ofs);
     clang::PrintingPolicy policy = C.getPrintingPolicy();
+    // Iteration over the decls might cause deserialization.
+    cling::Interpreter::PushTransactionRAII deserRAII(this);
     TU->print(Out, policy, Indentation, PrintInstantiation);
     Out.flush();
     }
-   }
+  }
 
   void Interpreter::compareInterpreterState(const std::string& name) const {
     // Store new state
