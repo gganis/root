@@ -8,6 +8,7 @@
 #define CLING_UTILS_AST_H
 
 #include "llvm/ADT/SmallSet.h"
+#include "llvm/ADT/DenseMap.h"
 
 namespace clang {
   class ASTContext;
@@ -40,16 +41,6 @@ namespace utils {
     ///
     static bool IsWrapper(const clang::NamedDecl* ND);
 
-    ///\brief Checks whether the declaration is a interpreter-generated
-    /// CallFunc wrapper function.
-    ///
-    ///\param[in] ND - The decl being checked. If null returns false. 
-    ///
-    ///\returns true if the decl is a interpreter-generated CallFunc wrapper
-    /// function.
-    ///
-    static bool IsCFWrapper(const clang::NamedDecl* ND);
-
     ///\brief Retrieves the last expression of a function body. If it was a
     /// DeclStmt with a variable declaration, creates DeclRefExpr and adds it to
     /// the function body.
@@ -78,7 +69,6 @@ namespace utils {
   class Synthesize {
   public:
     static const char* const UniquePrefix;
-    static const char* const CFUniquePrefix;
 
     ///\brief Synthesizes c-style cast in the AST from given pointer and type to
     /// cast to.
@@ -106,6 +96,20 @@ namespace utils {
   class Transform {
   public:
 
+    ///\brief Class containing the information on how to configure the
+    /// transformation
+    ///
+    struct Config {
+      typedef const clang::Type cType;
+      typedef llvm::SmallSet<cType*, 4> SkipCollection;
+      typedef llvm::DenseMap<cType*, cType*> ReplaceCollection;
+      
+      SkipCollection    m_toSkip;
+      ReplaceCollection m_toReplace;
+
+      bool empty() const { return m_toSkip.size()==0 && m_toReplace.empty(); }
+    };
+     
     ///\brief Remove one layer of sugar, but only some kinds.
     static bool SingleStepPartiallyDesugarType(clang::QualType& QT,
                                                const clang::ASTContext& C);
@@ -116,15 +120,15 @@ namespace utils {
     /// sugared type, which is to be skipped.
     ///\param[in] Ctx - The ASTContext.
     ///\param[in] QT - The type to be partially desugared.
-    ///\param[in] TypesToSkip - The set of sugared types which shouldn't be 
-    ///                         desugared.
+    ///\param[in] TypeConfig - The set of sugared types which shouldn't be 
+    ///                        desugared and those that should be replaced.
     ///\param[in] fullyQualify - if true insert Elaborated where needed.
     ///\returns Partially desugared QualType
     ///
     static
     clang::QualType
     GetPartiallyDesugaredType(const clang::ASTContext& Ctx, clang::QualType QT,
-      const llvm::SmallSet<const clang::Type*, 4>& TypesToSkip,
+      const Config& TypeConfig,
       bool fullyQualify = true);
 
   };

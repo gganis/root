@@ -42,6 +42,8 @@ namespace cling {
    class LookupHelper;
 }
 
+#include "cling/Utils/AST.h"
+
 // For TClassEdit::ESTLType and for TClassEdit::TInterpreterLookupHelper
 #include "TClassEdit.h"
 
@@ -55,33 +57,19 @@ namespace ROOT {
       // Convention used to separate name/value of properties in the ast annotations
       static const std::string PropertyNameValSeparator("@@@");
       
-      inline bool IsInt(const std::string& s){
-
-         size_t minusPos = s.find_first_of("-");
-         
-         // Count minuses
-         bool minusFound = false;
-         for (size_t i = 0; i < s.size(); i++){
-            if (s[i] == '-'){
-               if (minusFound) return false;
-                  minusFound=true;
-            }
-         }
-         
-         return s.find_first_not_of("-0123456789")==std::string::npos &&
-                !s.empty() &&
-                (minusPos == std::string::npos || minusPos == 0);
-      }
+      bool IsInt(const std::string& s);
 
       class TNormalizedCtxt {
          typedef llvm::SmallSet<const clang::Type*, 4> TypesCont_t;
+         typedef cling::utils::Transform::Config Config_t;
       private:
-         TypesCont_t fTypeToSkip;
+         Config_t    fConfig;
          TypesCont_t fTypeWithAlternative;
       public:
          TNormalizedCtxt(const cling::LookupHelper &lh);
 
-         const TypesCont_t &GetTypeToSkip() const { return fTypeToSkip; }
+         const Config_t    &GetConfig() const { return fConfig; }
+         const TypesCont_t &GetTypeToSkip() const { return fConfig.m_toSkip; }
          const TypesCont_t &GetTypeWithAlternative() const { return fTypeWithAlternative; }
       };
 

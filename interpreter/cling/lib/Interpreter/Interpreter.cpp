@@ -11,6 +11,7 @@
 #include "IncrementalParser.h"
 
 #include "cling/Interpreter/CIFactory.h"
+#include "cling/Interpreter/ClangInternalState.h"
 #include "cling/Interpreter/CompilationOptions.h"
 #include "cling/Interpreter/InterpreterCallbacks.h"
 #include "cling/Interpreter/LookupHelper.h"
@@ -21,6 +22,7 @@
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Mangle.h"
 #include "clang/Basic/TargetInfo.h"
+#include "clang/Basic/SourceManager.h"
 #include "clang/CodeGen/ModuleBuilder.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/Utils.h"
@@ -77,12 +79,15 @@ namespace {
 
 
 // "Declared" to the JIT in RuntimeUniverse.h
-extern "C" 
-int cling__runtime__internal__local_cxa_atexit(void (*func) (void*), void* arg,
-                                               void* dso,
-                                               void* interp) {
-   return ((cling::Interpreter*)interp)->CXAAtExit(func, arg, dso);
+extern "C" {
+  int cling__runtime__internal__local_cxa_atexit(void (*func) (void*), void* arg,
+                                                 void* dso,
+                                                 void* interp) {
+    return ((cling::Interpreter*)interp)->CXAAtExit(func, arg, dso);
+  }
 }
+
+
 
 namespace cling {
 #if (!_WIN32)
@@ -158,7 +163,6 @@ namespace cling {
     m_DynamicLookupEnabled(false), m_RawInputEnabled(false) {
 
     m_AtExitFuncs.reserve(200);
-    m_LoadedFiles.reserve(20);
 
     m_LLVMContext.reset(new llvm::LLVMContext);
     std::vector<unsigned> LeftoverArgsIdx;
@@ -303,159 +307,28 @@ namespace cling {
   }
 
   void Interpreter::storeInterpreterState(const std::string& name) const {
-    ASTContext& C = getSema().getASTContext();
-    TranslationUnitDecl* TU = C.getTranslationUnitDecl();
-    unsigned Indentation = 0;
-    bool PrintInstantiation = false;
-    std::string ErrMsg;
-    llvm::sys::Path Filename = llvm::sys::Path::GetCurrentDirectory();
-    if (Filename.isEmpty()) {
-      llvm::errs() << "Error: " << ErrMsg << "\n";
-      return;
-    }
-    //Test that the filename isn't already used
-    std::string testFilename = name + "AST.diff";
-    Filename.appendComponent(testFilename);
-    if (llvm::sys::fs::exists(Filename.str())) {
-      llvm::errs() << Filename.str() << "\n";
-      llvm::errs() << "Filename already exists. Please choose a new one \n";
-      exit (1);
-    }
-    else {
-    std::string rename = name + "AST.tmp";
-    Filename.eraseComponent();
-    Filename.appendComponent(rename);
-    std::ofstream ofs (Filename.c_str(), std::ofstream::out);  
-    llvm::raw_os_ostream Out(ofs);
-    clang::PrintingPolicy policy = C.getPrintingPolicy();
-    // Iteration over the decls might cause deserialization.
-    cling::Interpreter::PushTransactionRAII deserRAII(this);
-    TU->print(Out, policy, Indentation, PrintInstantiation);
-    Out.flush();
-    }
+    ClangInternalState* state 
+      = new ClangInternalState(getCI()->getASTContext(), name);
+    m_StoredStates.push_back(state);
   }
 
   void Interpreter::compareInterpreterState(const std::string& name) const {
-    // Store new state
-    std::string compareTo = name + "cmp";
-    storeInterpreterState(compareTo);
-    // Diff between the two existing file
-    llvm::sys::Path tmpDir1 = llvm::sys::Path::GetCurrentDirectory();
-     std::string ErrMsg;
-    if (tmpDir1.isEmpty()) {
-      llvm::errs() << "Error: " << ErrMsg << "\n";
-      return;
+    ClangInternalState* state 
+      = new ClangInternalState(getCI()->getASTContext(), name);    
+    for (unsigned i = 0, e = m_StoredStates.size(); i != e; ++i) {
+      if (m_StoredStates[i]->getName() == name) {
+        state->compare(*m_StoredStates[i]);
+        m_StoredStates.erase(m_StoredStates.begin() + i);
+        break;
+      }
     }
-    llvm::sys::Path stateFile1 = tmpDir1;
-    std::string state1 = name + "AST.tmp";
-    stateFile1.appendComponent(state1);
-    llvm::sys::Path tmpDir2 = llvm::sys::Path::GetCurrentDirectory();
-    if (tmpDir2.isEmpty()) {
-      llvm::errs() << "Error: " << ErrMsg << "\n";
-      return;
-    }
-    llvm::sys::Path stateFile2 = tmpDir2;
-    std::string state2 = name + "cmpAST.tmp";
-    stateFile2.appendComponent(state2);
-    std::string command = "diff -u " + stateFile1.str() + " " 
-      + stateFile2.str();
-// printing the results
-#ifndef LLVM_ON_WIN32
-      FILE* pipe = popen(command.c_str(), "r");
-      if (!pipe) {
-	perror( "Error" );
-      }
-      char buffer[128];
-      std::string result = "";
-      while(!feof(pipe)) {
-	if(fgets(buffer, 128, pipe) != NULL) 
-    		result += buffer;
-	  }
-      pclose(pipe);     
-      if(!result.empty()){
-	std::string ErrMsg;
-	llvm::sys::Path DiffFile = llvm::sys::Path::GetCurrentDirectory();
-	if (DiffFile.isEmpty()) {
-	  llvm::errs() << "Error: " << ErrMsg << "\n";
-	  return;
-	}
-	// Test if nameAST.diff already exists
-        std::string file;
-	llvm::sys::Path testFile = llvm::sys::Path::GetCurrentDirectory();
-	if (testFile.isEmpty()) {
-	  llvm::errs() << "Error: " << ErrMsg << "\n";
-	  return;
-        }
-	std::string testName = name + "AST.diff";
-	testFile.appendComponent(testName);
-	if (llvm::sys::fs::exists(testFile.str())){
-	  file = name + "1AST.diff";
-	}
-	else {
-	  file = name + "AST.diff";
-	}
-	DiffFile.appendComponent(file);
-	std::ofstream ofs (DiffFile.c_str(), std::ofstream::out);  
-	llvm::raw_os_ostream Out(ofs);
-	Out << result;
-	Out.flush();
-	llvm::errs() << "File with AST differencies stored in: ";
-	llvm::errs() << file << "\n";
-	llvm::errs() << DiffFile.c_str();
-	llvm::errs() << "\n";
-      }
-#else
-      FILE* pipe = _popen(command.c_str(), "r");
-      if (!pipe) {
-	perror( "Error" );
-      }
-      char buffer[128];
-      std::string result = "";
-      while(!feof(pipe)) {
-	  if(fgets(buffer, 128, pipe) != NULL)
-    		result += buffer;
-	  }
-      _pclose(pipe);  
-      if(!result.empty()){
-	std::string ErrMsg;
-	llvm::sys::Path DiffFile = llvm::sys::Path::GetCurrentDirectory();
-	if (DiffFile.isEmpty()) {
-	  llvm::errs() << "Error: " << ErrMsg << "\n";
-	  return;
-	}
-	// Test if nameAST.diff already exists
-        std::string file;
-	llvm::sys::Path testFile = llvm::sys::Path::GetCurrentDirectory();
-	if (testFile.isEmpty()) {
-	  llvm::errs() << "Error: " << ErrMsg << "\n";
-	  return;
-        }
-	std::string testName = name + "AST.diff";
-	testFile.appendComponent(testName);
-	if (llvm::sys::fs::exists(testFile.str())){
-	  file = name + "1AST.diff";
-	}
-	else {
-	  file = name + "AST.diff";
-	}
-	DiffFile.appendComponent(file);
-	std::ofstream ofs (DiffFile.c_str(), std::ofstream::out);  
-	llvm::raw_os_ostream Out(ofs);
-	Out.flush();
-	llvm::errs() << "File with AST differencies stored in: ";
-	llvm::errs() << file << "\n";
-	llvm::errs() << DiffFile.c_str();
-	llvm::errs() << "\n";
-      }
-#endif   
-      std::string command2 = stateFile1.str();
-      std::string command3 = stateFile2.str();
-      int result1 = std::remove(command2.c_str());
-      int result2 = std::remove(command3.c_str());
-      if((result1 != 0) && (result2 != 0))
-	perror( "Error deleting files were AST were stored" );
   }
-  
+
+  void Interpreter::printIncludedFiles(llvm::raw_ostream& Out) const {
+    ClangInternalState::printIncludedFiles(Out, getCI()->getSourceManager());
+  }
+
+
   // Adapted from clang/lib/Frontend/CompilerInvocation.cpp
   void Interpreter::GetIncludePaths(llvm::SmallVectorImpl<std::string>& incpaths,
                                    bool withSystem, bool withFlags) {
@@ -854,26 +727,20 @@ namespace cling {
     std::string WrapperName;
     std::string Wrapper = input;
     WrapInput(Wrapper, WrapperName);
-    Transaction* lastT = 0;
 
-    lastT = m_IncrParser->Compile(Wrapper, CO);
+    Transaction* lastT = m_IncrParser->Compile(Wrapper, CO);
     assert((!V || lastT->size()) && "No decls created!?");
     assert((lastT->getState() == Transaction::kCommitted
            || lastT->getState() == Transaction::kRolledBack) 
            && "Not committed?");
     assert(lastT->getWrapperFD() && "Must have wrapper!");
-    if (RunFunction(lastT->getWrapperFD(), V) < kExeFirstError)
-      return Interpreter::kSuccess;
+    if (lastT->getIssuedDiags() != Transaction::kErrors)
+      if (RunFunction(lastT->getWrapperFD(), V) < kExeFirstError)
+        return Interpreter::kSuccess;
     if (V)
       *V = StoredValueRef::invalidValue();
 
     return Interpreter::kFailure;
-  }
-
-  void Interpreter::addLoadedFile(const std::string& name,
-                                  Interpreter::LoadedFileInfo::FileType type,
-                                  const void* dyLibHandle) {
-    m_LoadedFiles.push_back(new LoadedFileInfo(name, type, dyLibHandle));
   }
 
   Interpreter::CompilationResult
@@ -890,8 +757,6 @@ namespace cling {
     std::string code;
     code += "#include \"" + filename + "\"";
     CompilationResult res = declare(code);
-    if (res == kSuccess)
-      addLoadedFile(filename, LoadedFileInfo::kSource);
     return res;
   }
 
@@ -959,25 +824,25 @@ namespace cling {
 
     // TODO: !permanent case
 #ifdef WIN32
-    void* DyLibHandle = needs to be implemented!;
+    void* dyLibHandle = needs to be implemented!;
     std::string errMsg;
 #else
-    const void* DyLibHandle = dlopen(FoundDyLib.str().c_str(), RTLD_LAZY|RTLD_GLOBAL);
+    const void* dyLibHandle
+      = dlopen(FoundDyLib.str().c_str(), RTLD_LAZY|RTLD_GLOBAL);
     std::string errMsg;
     if (const char* DyLibError = dlerror()) {
       errMsg = DyLibError;
     }
 #endif
-    if (!DyLibHandle) {
+    if (!dyLibHandle) {
       llvm::errs() << "cling::Interpreter::tryLinker(): " << errMsg << '\n';
       return kLoadLibError;
     }
-    std::pair<std::set<const void*>::iterator, bool> insRes
-      = m_DyLibs.insert(DyLibHandle);
+    std::pair<DyLibs::iterator, bool> insRes
+      = m_DyLibs.insert(std::pair<DyLibHandle, std::string>(dyLibHandle, 
+                                                            FoundDyLib.str()));
     if (!insRes.second)
       return kLoadLibExists;
-    addLoadedFile(FoundDyLib.str(), LoadedFileInfo::kDynamicLibrary,
-                  DyLibHandle);
     return kLoadLibSuccess;
   }
 
@@ -1016,6 +881,15 @@ namespace cling {
         return res;
     }
     return kLoadLibError;
+  }
+
+  bool Interpreter::isDynamicLibraryLoaded(llvm::StringRef fullPath) const {
+    for(DyLibs::const_iterator I = m_DyLibs.begin(), E = m_DyLibs.end(); 
+        I != E; ++I) {
+      if (fullPath.equals((I->second)))
+        return true;
+    }
+    return false;
   }
 
   void

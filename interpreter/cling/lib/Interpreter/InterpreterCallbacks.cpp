@@ -100,6 +100,12 @@ namespace cling {
 
       return false;
     }
+    // Silence warning virtual function was hidden.
+    using ExternalASTSource::CompleteType;
+    virtual void CompleteType(TagDecl* Tag) {
+      if (m_Callbacks)
+        m_Callbacks->LookupObject(Tag);
+    }
 
     void UpdateWithNewDeclsFwd(const DeclContext *DC, DeclarationName Name, 
                                llvm::ArrayRef<NamedDecl*> Decls) {
@@ -179,6 +185,11 @@ namespace cling {
   }
 
   bool InterpreterCallbacks::LookupObject(const DeclContext*, DeclarationName) {
+    // Default implementation is no op.
+    return false;
+  }
+
+  bool InterpreterCallbacks::LookupObject(TagDecl*) {
     // Default implementation is no op.
     return false;
   }

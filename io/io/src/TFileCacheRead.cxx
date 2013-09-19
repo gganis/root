@@ -530,7 +530,7 @@ Int_t TFileCacheRead::ReadBufferExtNormal(char *buf, Long64_t pos, Int_t len, In
 }
 
 //_____________________________________________________________________________
-void TFileCacheRead::SetFile(TFile *file)
+void TFileCacheRead::SetFile(TFile *file, TFile::ECacheAction action)
 {
    // Set the file using this cache and reset the current blocks (if any).
 
@@ -545,10 +545,12 @@ void TFileCacheRead::SetFile(TFile *file)
       }
    }
 
-   Prefetch(0,0);
+   if (action == TFile::kDisconnect)
+      Prefetch(0,0);
    
    if (fPrefetch) {
-      SecondPrefetch(0, 0);
+      if (action == TFile::kDisconnect)
+         SecondPrefetch(0, 0);
       fPrefetch->SetFile(file);
    }
 }
@@ -712,7 +714,7 @@ void TFileCacheRead::SetEnablePrefetchingImpl(Bool_t setPrefetching)
       const char* cacheDir = gEnv->GetValue("Cache.Directory", "");
       if (strcmp(cacheDir, ""))
         if (!fPrefetch->SetCache((char*) cacheDir))
-           fprintf(stderr, "Error while trying to set the cache directory.\n");
+           fprintf(stderr, "Error while trying to set the cache directory: %s.\n", cacheDir);
       if (fPrefetch->ThreadStart()){
          fprintf(stderr,"Error stating prefetching thread. Disabling prefetching.\n");
          fEnablePrefetching = 0;

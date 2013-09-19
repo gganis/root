@@ -124,7 +124,8 @@ namespace cling {
       consumeAnyStringToken();
       if (getCurTok().is(tok::raw_ident)) {
         result = true;
-        m_Actions->actOnLCommand(llvm::sys::Path(getCurTok().getIdent()));
+        actionResult =
+          m_Actions->actOnLCommand(llvm::sys::Path(getCurTok().getIdent()));
         consumeToken();
         if (getCurTok().is(tok::comment)) {
           consumeAnyStringToken();
@@ -290,16 +291,13 @@ namespace cling {
       skipWhitespace();
       if (!getCurTok().is(tok::quote))
 	return false; // FIXME: Issue proper diagnostics
-
       consumeToken();
       if (!getCurTok().is(tok::ident))
 	return false; // FIXME: Issue proper diagnostics
-
       std::string ident = getCurTok().getIdent();
       consumeToken();
       if (!getCurTok().is(tok::quote))
 	return false; // FIXME: Issue proper diagnostics
-
       m_Actions->actOnstoreStateCommand(ident);
       return true;
     }
@@ -314,16 +312,13 @@ namespace cling {
       skipWhitespace();
       if (!getCurTok().is(tok::quote))
 	return false; // FIXME: Issue proper diagnostics
-
       consumeToken();
       if (!getCurTok().is(tok::ident))
 	return false; // FIXME: Issue proper diagnostics
-
       std::string ident = getCurTok().getIdent();
       consumeToken();
       if (!getCurTok().is(tok::quote))
 	return false; // FIXME: Issue proper diagnostics
-
       m_Actions->actOncompareStateCommand(ident);
       return true;
     }

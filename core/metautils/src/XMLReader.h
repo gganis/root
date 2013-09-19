@@ -59,6 +59,7 @@ private:
       kMethod,
       kField,
       kProperties,
+      kVersion,
       
       kStartIgnore,
       kLcgdict,
@@ -69,6 +70,8 @@ private:
       kEndSelection,
       kEndExclusion,
       kEndLcgdict,
+      kBeginIoread,
+      kEndIoread,
       
       kInvalid,
       kNumTagNames

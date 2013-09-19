@@ -19,6 +19,7 @@
 
 #include "XMLReader.h"
 #include "SelectionRules.h"
+#include "TMetaUtils.h"
 
 std::map<std::string, XMLReader::ETagNames> XMLReader::fgMapTagNames;
 
@@ -44,6 +45,9 @@ void XMLReader::PopulateMap(){
    XMLReader::fgMapTagNames["exclusion"] = kExclusion;
    XMLReader::fgMapTagNames["/exclusion"] = kEndExclusion;
    XMLReader::fgMapTagNames["properties"] = kProperties;
+   XMLReader::fgMapTagNames["version"] = kVersion;
+   XMLReader::fgMapTagNames["ioread"] = kBeginIoread;
+   XMLReader::fgMapTagNames["/ioread"] = kEndIoread;
 }
 
 /*
@@ -138,19 +142,19 @@ bool XMLReader::GetNextTag(std::ifstream& file, std::string& out, int& lineCount
 bool XMLReader::CheckIsTagOK(const std::string& tag)
 {
    if (tag.length()<3){
-      std::cout<<"This is not a tag!"<<std::endl;
+      ROOT::TMetaUtils::Error(0,"This is not a tag!\n");
       return false;
    }
    
    // if tag doesn't begin with <, this is not a tag
    if (tag.at(0) != '<'){
-      std::cout<<"Malformed tag (tag doesn't begin with <)!"<<std::endl;
+      ROOT::TMetaUtils::Error(0,"Malformed tag (tag doesn't begin with <)!\n");
       return false;
    }
    
    // if the second symbol is space - this is malformed tag - name of the tag should go directly after the <
    if (isspace(tag.at(1))){
-      std::cout<<"Malformed tag (there should be no white-spaces between < and name-of-tag)!"<<std::endl;
+      ROOT::TMetaUtils::Error(0,"Malformed tag (there should be no white-spaces between < and name-of-tag)!\n");
       return false;
    }
    
@@ -164,7 +168,7 @@ bool XMLReader::CheckIsTagOK(const std::string& tag)
       }
       else {
          if (c == '/' && countWSp>0) {
-            std::cout<<"Malformed tag (there should be no white-spaces between / and >)!"<<std::endl;
+            ROOT::TMetaUtils::Error(0,"Malformed tag (there should be no white-spaces between / and >)!\n");
             return false;
          }
          break;
@@ -286,7 +290,7 @@ bool XMLReader::GetAttributes(const std::string& tag, std::vector<Attributes>& o
          
          if (c == '=') {
             if (!namefound){ // if no name was read, report error (i.e. <class ="x">)
-               std::cout<<"Error - no name of attribute"<<std::endl;
+               ROOT::TMetaUtils::Error(0,"No name of attribute\n");
                return false;
             }
             else {
@@ -308,13 +312,14 @@ bool XMLReader::GetAttributes(const std::string& tag, std::vector<Attributes>& o
                else { // if !value is false, then value is true which means that these are the closing quotes for the
                   // attribute value
                   if (attr_name.length() == 0) { // checks if attribute name is empty
-                     std::cout<<"Attribute error - missing attribute name!"<<std::endl;
+                     ROOT::TMetaUtils::Error(0,"Attribute - missing attribute name!\n");
                      return false;
                   }
-                  if (attr_value.length() == 0) { // checks if the attribute value is empty
-                     std::cout<<"Attribute error - missing attibute value!"<<std::endl;
-                     return false;
-                  }
+                  // Lift this: one may had an empty attribute value
+//                   if (attr_value.length() == 0) { // checks if the attribute value is empty
+//                      ROOT::TMetaUtils::Error(0,"Attribute - missing attibute value!\n");
+//                      return false;
+//                   }
                   
                   // creates new Attributes object and pushes it back in the vector
                   // then Sets the variables in the initial state - if there are other attributes to be read
@@ -322,7 +327,7 @@ bool XMLReader::GetAttributes(const std::string& tag, std::vector<Attributes>& o
                      //int pos = attr_value.find_last_of("(");
                      printf("NOT IMPLEMENTED YET!\n");
                   }
-                  std::cout << "*** Attribute: " << attr_name << " " << attr_value << std::endl;
+                  ROOT::TMetaUtils::Info(0, "*** Attribute: %s %s\n", attr_name.c_str(), attr_value.c_str());
                   Attributes at(attr_name, attr_value);
                   out.push_back(at);
                   attr_name = "";
@@ -335,14 +340,14 @@ bool XMLReader::GetAttributes(const std::string& tag, std::vector<Attributes>& o
             }
             else { // this is the case in which (name && equalfound) is false i.e. we miss either the attribute name or the 
                // = symbol
-               std::cout<<"Attribute error - missing attribute name or ="<<std::endl;
+               ROOT::TMetaUtils::Error(0,"Attribute - missing attribute name or =\n");
                return false;
             }
          }
          else if (lastsymbol == '=') { // this is the case in which the symbol is not ", space or = and the last symbol read
             // (diferent than space) is =. This is a situation which is represented by for example <class name = x"value">
             // this is an error
-            std::cout << "Error - wrong quotes placement or lack of quotes"<<std::endl;
+            ROOT::TMetaUtils::Error(0,"Wrong quotes placement or lack of quotes\n");
             return false;
          }
          else if ((newattr || namefound) && !value){ // else - if name or newattr is Set, we should write in the attr_name variable
@@ -357,7 +362,7 @@ bool XMLReader::GetAttributes(const std::string& tag, std::vector<Attributes>& o
       }
       
       if (namefound && (!equalfound || !value)) { // this catches the situation <class name = "value" something >
-         std::cout<<"Attribute error - missing attribute value"<<std::endl;
+         ROOT::TMetaUtils::Error(0,"Attribute - missing attribute value\n");
          return false;
       }
    }
@@ -394,8 +399,13 @@ bool XMLReader::Parse(std::ifstream &file, SelectionRules& out)
       std::string tagStr;
       
       bool tagOK = GetNextTag(file, tagStr, lineNum);
+
+      const char* tagStrCharp = tagStr.c_str();
+      // convert number to string
+      std::string lineNumStr=static_cast<std::ostringstream*>( &(std::ostringstream() << lineNum) )->str();
+      const char* lineNumCharp = lineNumStr.c_str();
       if (!tagOK){
-         std::cout<<"Error at line "<<lineNum<<std::endl<<"Bad tag: "<<tagStr<<std::endl;
+         ROOT::TMetaUtils::Error(0,"At line %s. Bad tag: %s\n", lineNumCharp, tagStrCharp);
          out.ClearSelectionRules();
          return false;
       }
@@ -406,7 +416,7 @@ bool XMLReader::Parse(std::ifstream &file, SelectionRules& out)
          ETagNames tagKind = GetNameOfTag(tagStr, name);
          bool attrError = GetAttributes(tagStr, attr);
          if (!attrError) {
-            std::cout<<"Attribute error at line "<<lineNum<<std::endl<<"Bad tag: "<<tagStr<<std::endl;
+            ROOT::TMetaUtils::Error(0,"Attribute at line %s. Bad tag: %s\n", lineNumCharp, tagStrCharp);
             out.ClearSelectionRules();
             return false;
          }
@@ -414,138 +424,282 @@ bool XMLReader::Parse(std::ifstream &file, SelectionRules& out)
          // after we have the name of the tag, we react according to the type of the tag
          switch (tagKind){
             case kInvalid:
-               std::cout<<"Error at line "<<lineNum<<" - unrecognized name of tag"<<std::endl<<"Bad tag: "<<tagStr<<std::endl;
+            {
+               ROOT::TMetaUtils::Error(0,"At line %s. Unrecognized name of tag %s\n", lineNumCharp, tagStrCharp);
                out.ClearSelectionRules(); //Clear the selection rules up to now
                return false;
-            case kClass: 
+            }
+            case kClass:
+            {
                if (!IsStandaloneTag(tagStr)){ // if the class tag is not standalone, then it has (probably) some child nodes
                   parent = tagStr;
                }
                csr = new ClassSelectionRule(fCount++, fInterp); // create new class selection rule
                bsr = csr; // we could access it through the base class pointer 
                break;
-            case kEndClass: 
+            }
+            case kEndClass:
+            {
                if (!parent.empty()) { // if this is closing a parent class element, clear the parent information
                   parent = "";
                   out.AddClassSelectionRule(*csr); // if we have a closing tag - we should write the class selection rule to the 
                   // SelectionRules object; for standalone class tags we write the class sel rule at the end of the tag processing
                }
                else { // if we don't have parent information, it means that this closing tag doesn't have opening tag
-                  std::cout<<"Error - Lonely </class> tag at line "<<lineNum<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"Single </class> tag at line %s",lineNumCharp);
                   out.ClearSelectionRules();
                   return false;
                }
                break;
-            case kSelection: 
+            }
+            case kVersion:
+            {
+               if (parent.empty()){
+                  ROOT::TMetaUtils::Error(0,"Version tag not within class element at line %s",lineNumCharp);
+                  out.ClearSelectionRules();
+                  return false;                  
+               }
+               break;
+            }
+            case kBeginIoread:
+            {
+               parent = tagStr;
+               // Try to see if we have CDATA to be put into the attributes
+               std::streampos initialPos(file.tellg());
+               const unsigned int lineCharsSize=1000;
+               char lineChars[lineCharsSize];
+               file.getline(lineChars,lineCharsSize);
+               std::string lineStr(lineChars);
+               // skip potential empty lines
+               while (lineStr == "" ||
+                      std::count(lineStr.begin(),lineStr.end(),' ') == (int)lineStr.size()){
+                  file.getline(lineChars,lineCharsSize);
+                  lineStr=lineChars;
+               }
+               // look for the start of the data section
+               size_t dataBeginPos = lineStr.find("<![CDATA[");
+               if (dataBeginPos==std::string::npos){ // no data
+                  file.seekg(initialPos);
+                  break;
+                  }
+                  
+               // we put ourselves after the <![CDATA[
+               lineStr = lineStr.substr(dataBeginPos+9); 
+
+               // if we are here, we have data. Let's put it in a string which
+               // will become the code attribute
+               std::string codeAttrVal;
+               while(true){
+                  // while loop done to read the data
+                  // if we find ]]>, it means we are at the end of the data,
+                  // we need to stop
+                  size_t dataEndPos = lineStr.find("]]>");                  
+                  if (dataEndPos!=std::string::npos) {
+                     // add code that may be before the ]]>
+                     codeAttrVal+=lineStr.substr(0,dataEndPos);
+                     break;
+                  }                  
+                  codeAttrVal+=lineStr; // here because data can be on one line!
+                  file.getline(lineChars,lineCharsSize);
+                  lineStr=lineChars;
+               }
+               Attributes at("code", codeAttrVal);
+               attr.push_back(at);
+               break;
+            }
+            case kEndIoread:
+            {
+               if (parent.empty()){
+                  ROOT::TMetaUtils::Error(0,"Single </ioread> at line %s",lineNumCharp);
+                  out.ClearSelectionRules();
+                  return false;
+               }
+               break;
+            }
+            case kSelection:
+            {
                sel = true; // we need both selection (indicates that we are in the selection section) and sel (indicates that
                // we had an opening <selection> tag)
                selection = true;
                exclusion = false;
                break;
+            }
             case kEndSelection:
+            {
                if (selection) { // if we had opening selection tag, everything is OK
                   selection = false; 
                   selEnd = true;
                }
                else { // if not, this is a closing tag without an opening such
-                  std::cout<<"Error at line "<<lineNum<<" - missing <selection> tag"<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"At line %s. Missing <selection> tag", lineNumCharp);
                   out.ClearSelectionRules();
                   return false;
                }
                break;
-            case kExclusion: 
+            }
+            case kExclusion:
+            {
                excl = true; // we need both exclusion (indicates that we are in the exclusion section) and excl (indicates we had
                // at a certain time an opening <exclusion> tag)
                if (selection) { // if selection is true, we didn't have fEndSelection type of tag
-                  std::cout<<"Error at line "<<lineNum<<" - missing </selection> tag"<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"At line %s. Missing </selection> tag", lineNumCharp);
                   out.ClearSelectionRules();
                   return false;
                }
                // DEBUG std::cout<<std::endl<<"---------Exclusion part----------"<<std::endl<<std::endl;
                exclusion=true;
                break;
-            case kEndExclusion: 
+            }
+            case kEndExclusion:
+            {
                if (exclusion) { // if exclusion is Set, everything is OK
                   exclusion=false; 
                   exclEnd = true;
                }
                else { // if not we have a closing </exclusion> tag without an opening <exclusion> tag
-                  std::cout<<"Error at line "<<lineNum<<" - missing <exclusion> tag"<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"At line %s. Missing <exclusion> tag", lineNumCharp);
                   out.ClearSelectionRules();
                   return false;
                }
                break;
+            }
             case kField:
+            {
                if (parent.empty()){ // if we have a <field>, <method> or <properties> tag outside a parent <clas>s tag, 
                   //this is an error
-                  std::cout<<"Error at line "<<lineNum<<" - Tag ("<<tagStr<<") not inside <class> element!"<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"At line %s. Tag %s not inside a <class> element\n", lineNumCharp,tagStrCharp);
                   out.ClearSelectionRules();
                   return false;
                }
                if (!IsStandaloneTag(tagStr)) {
-                  std::cout<<"Error at line "<<lineNum<<" - tag should be standalone"<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"At line %s. Tag should be standalone\n", lineNumCharp);
                   out.ClearSelectionRules();
                   return false;
                }
                vsr = new VariableSelectionRule(fCount++, fInterp); // the field is variable selection rule object
                bsrChild = vsr;
                break;
+            }
             case kMethod:
+            {
                if (parent.empty()){ // if we have a <field>, <method> or <properties> tag outside a parent <clas>s tag, 
                   //this is an error
-                  std::cout<<"Error at line "<<lineNum<<" - Tag ("<<tagStr<<") not inside <class> element!"<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"At line %s. Tag %s not inside a <class> element\n", lineNumCharp,tagStrCharp);
                   out.ClearSelectionRules();
                   return false;
                }
                if (!IsStandaloneTag(tagStr)) {
-                  std::cout<<"Error at line "<<lineNum<<" - tag should be standalone"<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"At line %s. Tag should be standalone\n", lineNumCharp);
                   out.ClearSelectionRules();
                   return false;
                }
                fsr = new FunctionSelectionRule(fCount++, fInterp); // the method is function selection rule object
                bsrChild = fsr;
                break;
+            }
             case kProperties:
+            {
                if (parent.empty()){ // if we have a <field>, <method> or <properties> tag outside a parent <clas>s tag, 
                   //this is an error
-                  std::cout<<"Error at line "<<lineNum<<" - Tag ("<<tagStr<<") not inside <class> element!"<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"At line %s. Tag %s not inside a <class> element\n", lineNumCharp,tagStrCharp);
                   out.ClearSelectionRules();
                   return false;
                }
                if (!IsStandaloneTag(tagStr)) {
-                  std::cout<<"Error at line "<<lineNum<<" - tag should be standalone"<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"At line %s. Tag should be standalone\n", lineNumCharp);
                   out.ClearSelectionRules();
                   return false;
                }
                // we don't create separate selection object for properties - we include them as attribute-value pairs for the class
                break;
-            case kFunction: 
+            }
+            case kFunction:
+            {
                fsr = new FunctionSelectionRule(fCount++, fInterp);
                bsr = fsr;
                break;
-            case kVariable: 
+            }
+            case kVariable:
+            {
                vsr = new VariableSelectionRule(fCount++, fInterp);
                bsr = vsr;
                break;
+            }
             case kEnum:
+            {
                esr = new EnumSelectionRule(fCount++, fInterp);
                bsr = esr;
                break;
-            case kLcgdict: 
-            case kEndLcgdict: 
+            }
+            case kLcgdict:
+            {}
+            case kEndLcgdict:
+            {
                break;
-            default: std::cout<<"Unknown tag name: ";
+            }
+            default: ROOT::TMetaUtils::Error(0,"Unknown tag name: %s \n",tagStrCharp);
          }
+
+
+         // Take care of ioread rules
+         if (tagKind == kBeginIoread){
+            // A first sanity check
+            if (attr.empty()){
+               ROOT::TMetaUtils::Error(0,"At line %s. ioread element has no attributes.\n",lineNumCharp);
+               return false;
+            }
+            // Loop over the attrs to get the info to build the linkdef-like string
+            // Cache the name and the value            
+            std::string iAttrName;
+            std::string iAttrValue;
+            // save attributes in a map to then format the new line which is of the form
+            // #pragma read sourceClass="class1" targetClass="class2" version="[1-]" source="" target="transient_" code="{ newObj->initializeTransientss(); }";
+            // where "#pragma read" should not appear
+            // Therefore these attributes are expected:
+            // 1) sourceClass
+            // 2) targetClass
+            // 3) version
+            // 4) source
+            // 5) target
+            // 6) code
+            std::map<std::string,std::string> pragmaArgs;
+            for (int i = 0, n = attr.size(); i < n; ++i) {
+               pragmaArgs[attr[i].fName]=attr[i].fValue;
+            }
+            
+            bool mapIsSane= pragmaArgs.count("sourceClass") == 1 &&
+                            pragmaArgs.count("targetClass") == 1 &&
+                            pragmaArgs.count("version") == 1 &&
+                            pragmaArgs.count("source") == 1 &&
+                            pragmaArgs.count("target") == 1 &&
+                            pragmaArgs.count("code") == 1;
+                            
+            if (!mapIsSane){
+               ROOT::TMetaUtils::Error(0,"At line %s. Incomplete ioread tag.\n",lineNumCharp);
+               return false;
+            }
+
+            std::stringstream pragmaLineStream;
+            pragmaLineStream << "sourceClass=\"" << pragmaArgs["sourceClass"] << "\""
+                             << " targetClass=\""<< pragmaArgs["sourceClass"] << "\""
+                             << " version=\""<< pragmaArgs["version"] << "\""
+                             << " source=\""<< pragmaArgs["source"] << "\""
+                             << " target=\""<< pragmaArgs["target"] << "\""
+                             << " code=\"{"+pragmaArgs["code"]+"}\"";
+                             
+            // Now send them to the pragma processor. The info will be put
+            // in a global then read by the TMetaUtils
+            ROOT::TMetaUtils::Info(0,"Pragma generated for ioread rule: %s", pragmaLineStream.str().c_str());
+            ROOT::ProcessReadPragma( pragmaLineStream.str().c_str() );
+
+            continue; // no need to go further
+         } // end of ioread rules         
          
          
-         if (!tagStr.empty()) {
-            // DEBUG std::cout<<name<<"   (Tag: "<<tagStr<<")"<<std::endl;
-            
-            // DEBUG std::cout<<"Standalone: ";
-            // DEBUG if (IsStandaloneTag(tagStr) || IsClosingTag(tagStr)) std::cout<<"Yes"<<std::endl;
-            // DEBUG else std::cout<<"No"<<std::endl;
-            
-            // DEBUG std::cout<<"Selected: ";
+         // We do not want to propagate in the meta the values in the
+         // version tag
+         if (!tagStr.empty() && tagKind != kVersion) {
+
             if (!exclusion && !IsClosingTag(tagStr)) { // exclusion should be false, we are not interested in closing tags
                // as well as in key-tags such as <selection> and <lcgdict> 
                if (tagKind == kLcgdict || tagKind == kSelection) 
@@ -581,7 +735,7 @@ bool XMLReader::Parse(std::ifstream &file, SelectionRules& out)
                // because these tag kinds cannot be children for a parent <class> tag
                else if (tagKind == kClass || tagKind == kEnum || tagKind == kVariable || tagKind == kFunction ||
                         tagKind == kEndSelection || tagKind == kExclusion || tagKind == kEndExclusion){
-                  std::cout<<"XML error at line "<<lineNum<<" - missing </class> tag"<<std::endl;
+                  ROOT::TMetaUtils::Error(0,"XML at line %s. Missing </class> tag\n",lineNumCharp);
                   out.ClearSelectionRules();
                   return false;
                }
@@ -590,40 +744,58 @@ bool XMLReader::Parse(std::ifstream &file, SelectionRules& out)
             // DEBUG else std::cout<<"No"<<std::endl;
             
             
-            if (attr.empty()) ;// DEBUG std::cout<<"Tag doesn't have attributes"<<std::endl<<std::endl;
-            else {
-               // DEBUG std::cout<<"Attributes:"<<std::endl;
+            if (!attr.empty()){               
+               // Cache the name and the value
+               std::string iAttrName;
+               std::string iAttrValue;               
                for (int i = 0, n = attr.size(); i < n; ++i) {
-                  // DEBUG std::cout << "\tAttrName[" << i << "]: " << attr[i].fName << " | AttrValue["<<i<<"]: "<<attr[i].fValue<<std::endl;
-
+                  iAttrName=attr[i].fName;
+                  iAttrValue=attr[i].fValue;
                   // Set the class version
-                  if (tagKind == kClass && "ClassVersion" == attr[i].fName && csr){
-                     csr->SetRequestedVersionNumber(atoi(attr[i].fValue.c_str()));
+                  if (tagKind == kClass &&
+                      csr &&
+                     "ClassVersion" == iAttrName){
+                     csr->SetRequestedVersionNumber(atoi(iAttrValue.c_str()));
+                     continue;
                   }
                   
-                  if (tagKind == kClass || tagKind == kProperties || tagKind == kEnum || tagKind == kFunction || 
+                  if (tagKind == kClass ||
+                      tagKind == kProperties ||
+                      tagKind == kEnum ||
+                      tagKind == kFunction ||
                       tagKind == kVariable) {
-                     if (bsr->HasAttributeWithName(attr[i].fName)) {
-                        std::cout<<"Error - duplicating attribute at line "<<lineNum<<std::endl;
-                        out.ClearSelectionRules();
-                        return false;
+                     if (bsr->HasAttributeWithName(iAttrName)) {
+                        std::string preExistingValue;                        
+                        bsr->GetAttributeValue(iAttrName,preExistingValue);
+                        if (preExistingValue!=iAttrValue){ // If different from before
+                           ROOT::TMetaUtils::Error(0,
+                              "Line %s: assigning new value %s to attribue %s (it was %s)\n",
+                              lineNumCharp,iAttrValue.c_str(),iAttrName.c_str(),preExistingValue.c_str());
+                           out.ClearSelectionRules();
+                           return false;
+                        }
                      }
-                     bsr->SetAttributeValue(attr[i].fName, attr[i].fValue);
-                     if ((attr[i].fName == "file_name" || attr[i].fName == "file_pattern") && tagKind == kClass){
+                     bsr->SetAttributeValue(iAttrName, iAttrValue);
+                     if ((iAttrName == "file_name" || iAttrName == "file_pattern") && tagKind == kClass){
                         bsr->SetAttributeValue("pattern","*");
                         out.SetHasFileNameRule(true);
                      }
                   }
                   else {
-                     if (bsrChild->HasAttributeWithName(attr[i].fName)) {
-                        std::cout<<"Error - duplicating attribute at line "<<lineNum<<std::endl;
-                        out.ClearSelectionRules();
-                        return false;
+                     if (bsrChild->HasAttributeWithName(iAttrName)) {
+                        std::string preExistingValue;
+                        bsrChild->GetAttributeValue(iAttrName,preExistingValue);
+                        if (preExistingValue!=iAttrValue){ // If different from before
+                           ROOT::TMetaUtils::Error(0,
+                             "Line %s: assigning new value %s to attribue %s (it was %s)\n",
+                             lineNumCharp,iAttrValue.c_str(),iAttrName.c_str(),preExistingValue.c_str());
+                           out.ClearSelectionRules();
+                           return false;
+                        }
                      }
-                     bsrChild->SetAttributeValue(attr[i].fName, attr[i].fValue);
+                     bsrChild->SetAttributeValue(iAttrName, iAttrValue);
                   }
                }
-               // DEBUG std::cout<<std::endl;
             }
          }
          
@@ -657,13 +829,13 @@ bool XMLReader::Parse(std::ifstream &file, SelectionRules& out)
    // we are outside of the while cycle which means that we have read the whole XML document
    
    if (sel && !selEnd) { // if selEnd is true, it menas that we never had a closing </selection> tag
-      std::cout<<"Error - missing </selection> tag"<<std::endl;
+      ROOT::TMetaUtils::Error(0,"Error - missing </selection> tag\n");
       out.ClearSelectionRules();
       return false;
    }
    if (excl && !exclEnd ) { // if excl is true and exclEnd is false, it means that we had an opening <exclusion> tag but we
       // never had the closing </exclusion> tag
-      std::cout<<"Error - missing </exclusion> tag"<<std::endl;
+      ROOT::TMetaUtils::Error(0,"Error - missing </selection> tag\n");
       out.ClearSelectionRules();
       return false;    
    }

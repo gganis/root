@@ -6,6 +6,8 @@
 
 #include "cling/UserInterface/UserInterface.h"
 
+#include "cling/UserInterface/CompilationException.h"
+#include "cling/Interpreter/RuntimeException.h"
 #include "cling/Interpreter/StoredValueRef.h"
 #include "cling/MetaProcessor/MetaProcessor.h"
 #include "textinput/TextInput.h"
@@ -13,6 +15,7 @@
 #include "textinput/TerminalDisplay.h"
 
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/PathV1.h"
 #include "llvm/Config/config.h"
 
@@ -33,13 +36,28 @@
 #endif
 #endif
 
+namespace {
+  // Handle fatal llvm errors by throwing an exception.
+  // Yes, throwing exceptions in error handlers is bad.
+  // Doing nothing is pretty terrible, too.
+  void exceptionErrorHandler(void * /*user_data*/,
+                             const std::string& reason,
+                             bool /*gen_crash_diag*/) {
+    throw cling::CompilationException(reason);
+  }
+}
+
 namespace cling {
+  // Declared in CompilationException.h; vtable pinned here.
+  CompilationException::~CompilationException() throw() {}
+
   UserInterface::UserInterface(Interpreter& interp) {
     // We need stream that doesn't close its file descriptor, thus we are not
     // using llvm::outs. Keeping file descriptor open we will be able to use
     // the results in pipes (Savannah #99234).
     static llvm::raw_fd_ostream m_MPOuts (STDOUT_FILENO, /*ShouldClose*/false);
     m_MetaProcessor.reset(new MetaProcessor(interp, m_MPOuts));
+    llvm::install_fatal_error_handler(&exceptionErrorHandler);
   }
 
   UserInterface::~UserInterface() {}
@@ -88,6 +106,17 @@ namespace cling {
 
         TI.SetPrompt(Prompt.c_str());
 
+      }
+      catch(runtime::NullDerefException& e) {
+        e.diagnose();
+      }
+      catch(runtime::InterpreterException& e) {
+        llvm::errs() << ">>> Caught an interpreter exception!\n"
+                     << ">>> " << e.what() << '\n';
+      }
+      catch(std::exception& e) {
+        llvm::errs() << ">>> Caught a std::exception!\n"
+                     << ">>> " << e.what() << '\n';
       }
       catch(...) {
         llvm::errs() << "Exception occurred. Recovering...\n";

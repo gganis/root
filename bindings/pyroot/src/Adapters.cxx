@@ -121,11 +121,6 @@ std::string PyROOT::TMemberAdapter::Name( unsigned int mod ) const
       std::string::size_type pos = scoped_name.find(class_name + "::");
       if (pos == 0)      // only accept found at start
          scoped_name = scoped_name.substr(class_name.size() + 2 /* for :: */, std::string::npos);
-
-   // CLING WORKAROUND (ROOT-5204) -- operator _Bool -> operator bool
-      if ( scoped_name == "operator _Bool" )
-         scoped_name = "operator bool";
-   // -- CLING WORKAROUND
       return scoped_name;
    }
 
@@ -279,7 +274,10 @@ PyROOT::TScopeAdapter PyROOT::TScopeAdapter::ByName( const std::string& name, Bo
    if (klass.GetClass() && klass->GetListOfAllPublicMethods()->GetSize() == 0) {
    // sometimes I/O interferes, leading to zero methods: reload from CINT
       ClassInfo_t* cl = gInterpreter->ClassInfo_Factory( name.c_str() );
-      if ( cl ) gInterpreter->SetClassInfo( klass, kTRUE );
+      if ( cl ) {
+         gInterpreter->SetClassInfo( klass, kTRUE );
+         gInterpreter->ClassInfo_Delete(cl);
+      }
    }
 
    gErrorIgnoreLevel = oldEIL;

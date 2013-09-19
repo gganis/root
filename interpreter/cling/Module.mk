@@ -13,13 +13,14 @@ CLINGS       := $(wildcard $(MODDIR)/lib/Interpreter/*.cpp) \
                 $(wildcard $(MODDIR)/lib/MetaProcessor/*.cpp) \
                 $(wildcard $(MODDIR)/lib/Utils/*.cpp)
 CLINGO       := $(call stripsrc,$(CLINGS:.cpp=.o))
+CLINGEXCEPO  := $(call stripsrc,$(MODDIR)/lib/Interpreter/RuntimeException.o)
 
 CLINGDEP     := $(CLINGO:.o=.d)
 
 CLINGETC_CLING := DynamicExprInfo.h DynamicLookupRuntimeUniverse.h \
         DynamicLookupLifetimeHandler.h Interpreter.h InvocationOptions.h \
         RuntimeUniverse.h StoredValueRef.h Value.h \
-        ValuePrinter.h ValuePrinterInfo.h
+        ValuePrinter.h ValuePrinterInfo.h RuntimeException.h
 
 CLINGETC_LLVM := llvm/ADT/IntrusiveRefCntPtr.h \
         llvm/ADT/OwningPtr.h \
@@ -143,10 +144,11 @@ endif
 ifneq ($(LLVMDEV),)
 $(CLINGO)   : CLINGCXXFLAGS += '-DCLING_SRCDIR_INCL="$(CLINGDIR)/include"' \
 	'-DCLING_INSTDIR_INCL="$(shell cd $(LLVMDIRI); pwd)/include"'
-$(CLINGEXEO): CLINGEXCCXXFLAGS := -fexceptions
 $(CLINGEXEO): CLINGCXXFLAGS += -I$(TEXTINPUTDIRS)
+$(CLINGEXEO): CLINGEXCCXXFLAGS := -fexceptions
 else
 endif
 
+$(CLINGEXCEPO): CLINGEXCCXXFLAGS := -fexceptions
 $(CLINGETC) : $(LLVMLIB)
 $(CLINGO)   : $(CLINGETC)

@@ -8,6 +8,11 @@
  * For the list of contributors see $ROOTSYS/README/CREDITS.             *
  *************************************************************************/
 
+const char *shortHelp =
+"Usage: rootcling [-v][-v0-4] [-f] [out.cxx] [-rmf rootMapFile] "
+"[-rml rootMapLibrary] [-cap capabilitiesFile] [-s sharedLibrary] [-m pcmfile] "
+"file1.h[+][-][!] file2.h[+][-][!] ...[LinkDef.h]\n";
+
 // Write the help as a big string to have only one version of the documentation
 const char *rootClingHelp =
 "                                                                            \n"
@@ -23,8 +28,9 @@ const char *rootClingHelp =
 "                                                                            \n"
 "or                                                                          \n"
 "                                                                            \n"
-" rootcling [-v[0-4]][-f] dict.C [-s sharedLibrary] [-m pcm]                 \n"
-"          file.h[{+,-}][!] ... [LinkDef.h]                                  \n"
+"rootcling [-v][-v0-4] [-f] [out.cxx] [-rmf rootMapFile] [-rml rootMapLib] "
+"[-cap capabilitiesFile] [-s sharedLibrary] [-m pcmfile] "
+"file1.h[+][-][!] file2.h[+][-][!] ...[LinkDef.h]                            \n"
 "                                                                            \n"
 "The difference between the two is that in the first case only the           \n"
 "Streamer() and ShowMembers() methods are generated while in the             \n"
@@ -38,6 +44,9 @@ const char *rootClingHelp =
 "Use the -f (force) option to overwite the output file. The output           \n"
 "file must have one of the following extensions: .cxx, .C, .cpp,             \n"
 ".cc, .cp.                                                                   \n"
+"The flags -rml and -rmf are used for the rootmaplib and the rootmap file    \n"
+"respectively. The rootmap file option can be omitted. In this case, the name\n"
+"is inferred from the name of the root map library.                          \n"
 "The flag -s must be followed by the name of the library that will           \n"
 "contain the object file corresponding to the dictionary produced by         \n"
 "this invocation of rootcling.  The name will be used as the stem            \n"
@@ -172,9 +181,11 @@ const char *rootClingHelp =
 #include "llvm/Support/PathV2.h"
 
 #ifdef WIN32
-const std::string gPathSeparator ("\\");
+ const std::string gPathSeparator ("\\");
+ const std::string gLibraryExtension (".dll");
 #else
-const std::string gPathSeparator ("/");
+ const std::string gPathSeparator ("/");
+ const std::string gLibraryExtension (".so"); // no dylib for the moment
 #endif
 
 
@@ -311,6 +322,7 @@ static std::string GetRelocatableHeaderName(const char *header, const std::strin
 #endif
    return result;
 }
+
 using namespace ROOT;
 
 std::ostream* dictSrcOut = &std::cout;
@@ -371,7 +383,7 @@ void AnnotateFieldDecl(clang::NamedDecl& decl,
                userDefinedProperty="//!";
             else
                userDefinedProperty=name+ROOT::TMetaUtils::PropertyNameValSeparator+value;
-            std::cout << varName << " " << userDefinedProperty << std::endl;
+            ROOT::TMetaUtils::Info(0,"%s %s\n",varName.c_str(),userDefinedProperty.c_str());
             decl.addAttr(new (C) clang::AnnotateAttr(commentRange, C, userDefinedProperty));
          }
       }
@@ -397,8 +409,8 @@ void AnnotateDecl(clang::CXXRecordDecl &CXXRD,
    std::string declName;
    const std::string thisClassName(CXXRD.getName());
 
-   if (genreflex::verbose)
-      std::cout << "\nInspecting class declaration " << thisClassName << " for annotations\n";
+//    if (genreflex::verbose)
+//       std::cout << "\nInspecting class declaration " << thisClassName << " for annotations\n";
 
    // Fetch the selection rule associated to this class
    clang::Decl* declBaseClassPtr = static_cast<clang::Decl*>(&CXXRD);
@@ -2025,12 +2037,14 @@ bool Which(cling::Interpreter &interp, const char *fname, string& pname)
 
    FILE *fp = 0;
 
+   #ifdef WIN32
+   static const char* fopenopts = "rb";
+   #else
+   static const char* fopenopts = "r";
+   #endif
+   
    pname = fname;
-#ifdef WIN32
-   fp = fopen(pname.c_str(), "rb");
-#else
-   fp = fopen(pname.c_str(), "r");
-#endif
+   fp = fopen(pname.c_str(), fopenopts);
    if (fp) {
       fclose(fp);
       return true;
@@ -2043,15 +2057,8 @@ bool Which(cling::Interpreter &interp, const char *fname, string& pname)
    const size_t nPaths = includePaths.size();
    for (size_t i = 0; i < nPaths; i += 1 /* 2 */) {
 
-      pname = includePaths[i].c_str();
-#ifdef WIN32
-      pname += "\\";
-      static const char* fopenopts = "rb";
-#else
-      pname += "/";
-      static const char* fopenopts = "r";
-#endif
-      pname += fname;
+      pname = includePaths[i].c_str()+gPathSeparator+fname;
+
       fp = fopen(pname.c_str(), fopenopts);
       if (fp) {
          fclose(fp);
@@ -2115,42 +2122,6 @@ void StrcpyArgWithEsc(string& escaped, const char *original)
    // necessary and then escaping string.
 
    escaped = CopyArg( original );
-}
-
-std::string gDictsrcForCleanup;
-//______________________________________________________________________________
-void CleanupOnExit(int code)
-{
-   // Removes tmp files, and (if code!=0) output files.
-
-   if (code) {
-      if (!gDictsrcForCleanup.empty()) {
-         unlink(gDictsrcForCleanup.c_str());
-         // also remove the .d file belonging to dictsrc
-         size_t posExt=gDictsrcForCleanup.rfind('.');
-         if (posExt!=string::npos) {
-            gDictsrcForCleanup.replace(posExt, gDictsrcForCleanup.length(), ".d");
-            unlink(gDictsrcForCleanup.c_str());
-         }
-      }
-   }
-   // also remove the .def file created by CINT.
-   {
-      size_t posExt=gDictsrcForCleanup.rfind('.');
-      if (posExt!=string::npos) {
-         gDictsrcForCleanup.replace(posExt, gDictsrcForCleanup.length(), ".def");
-         unlink(gDictsrcForCleanup.c_str());
-
-         size_t posSlash=gDictsrcForCleanup.rfind('/');
-         if (posSlash==string::npos) {
-            posSlash=gDictsrcForCleanup.rfind('\\');
-         }
-         if (posSlash!=string::npos) {
-            gDictsrcForCleanup.replace(0,posSlash+1,"");
-            unlink(gDictsrcForCleanup.c_str());
-         }
-      }
-   }
 }
 
 //______________________________________________________________________________
@@ -2239,7 +2210,7 @@ static int GenerateModule(TModuleGenerator& modGen,
 
       // Write the generated bitstream to "Out".
       OS->write((char *)&Buffer.front(), Buffer.size());
-
+            
       // Make sure it hits disk now.
       OS->flush();
       bool deleteOutputFile =  CI->getDiagnostics().hasErrorOccurred();
@@ -2324,6 +2295,58 @@ void AddPlatformDefines(std::vector<std::string>& clingArgs)
    #endif
 }
 
+void AddGccToolChainDefines (std::vector<std::string>& clingArgs) {
+   #ifdef R__GCC_TOOLCHAIN
+   clingArgs.push_back("-gcc-toolchain");
+   clingArgs.push_back(R__GCC_TOOLCHAIN);
+   #endif
+   #ifdef R__GCC_INC_DIR_0
+   clingArgs.push_back("-nostdinc++");
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_0);
+   #endif
+   #ifdef R__GCC_INC_DIR_1
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_1);
+   #endif
+   #ifdef R__GCC_INC_DIR_2
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_2);
+   #endif
+   #ifdef R__GCC_INC_DIR_3
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_3);
+   #endif
+   #ifdef R__GCC_INC_DIR_4
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_4);
+   #endif
+   #ifdef R__GCC_INC_DIR_5
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_5);
+   #endif
+   #ifdef R__GCC_INC_DIR_6
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_6);
+   #endif
+   #ifdef R__GCC_INC_DIR_7
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_7);
+   #endif
+   #ifdef R__GCC_INC_DIR_8
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_8);
+   #endif
+   #ifdef R__GCC_INC_DIR_9
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_9);
+   #endif
+   #ifdef R__GCC_INC_DIR_10
+   clingArgs.push_back("-I");
+   clingArgs.push_back(R__GCC_INC_DIR_10);
+   #endif   
+}
+
 //______________________________________________________________________________
 void replaceAll(std::string& str, const std::string& from, const std::string& to)
 {
@@ -2360,6 +2383,83 @@ void extractFilePath(const std::string& path, std::string& dirname)
    } else {
       dirname.assign("");
    }
+}
+
+//______________________________________________________________________________
+char const *model_c[] ={
+"\n",
+"// This file has been generated by genreflex with the --capabilities option\n",
+"static  const char* clnames[] = {\n",
+"//--Final End\n",
+"};\n",
+"\n",
+"extern \"C\" void SEAL_CAPABILITIES (const char**& names, int& n )\n",
+"{\n",
+"names = clnames;\n",
+"n = sizeof(clnames)/sizeof(char*);\n",
+"}\n"};
+
+std::list<std::string> model(model_c, model_c + sizeof(model_c) / sizeof(*model_c));
+
+int createCapabilitiesFile(const std::string& capaFileName,
+                           const std::string& dictFileName,
+                           const std::list<std::string>& classesNames)
+{
+
+   // Create the capabilities file
+   
+   const std::string startmark("//--Begin " + dictFileName + "\n");
+   const std::string endmark  ("//--End   " + dictFileName + "\n");
+   const std::string finalmark("//--Final End\n");
+   const std::string capaPre("LCGReflex");
+
+   std::list<std::string> new_lines;
+
+   for (std::list<std::string>::const_iterator lineIt=classesNames.begin();
+        lineIt!=classesNames.end(); ++lineIt){      
+      new_lines.push_back(" \""+capaPre+"/"+TClassEdit::InsertStd(lineIt->c_str())+"\",\n");
+      }
+
+   std::ifstream ifile(capaFileName.c_str());
+   std::list<std::string> lines;
+
+   if (!ifile){
+      lines= model;
+      }
+   else { // if there, read file in
+      std::string temp;
+      while(std::getline(ifile, temp)){lines.push_back(temp+"\n");};
+      }
+   ifile.close();
+
+   // Now replace lines if dict already in the capabilities content if there
+   std::list<std::string>::iterator startMarkPos(std::find(lines.begin(),lines.end(),startmark));
+   std::list<std::string>::iterator endMarkPos(std::find(lines.begin(),lines.end(),endmark));
+   if (startMarkPos != lines.end() && endMarkPos != lines.end()){
+      // increment since erase erases elements like [first,last)
+      startMarkPos++;
+      lines.erase(startMarkPos,endMarkPos);
+      // insert at endMarkPos since insert inserts before the position
+      lines.insert(endMarkPos,new_lines.begin(),new_lines.end());
+      }
+   else{// if not, just add it
+      startMarkPos=std::find(lines.begin(),lines.end(),finalmark);
+      new_lines.push_front(startmark);
+      new_lines.push_back(endmark);
+      lines.insert(startMarkPos,new_lines.begin(),new_lines.end());
+      }
+
+   std::ofstream capaFile(capaFileName.c_str());
+   if (!capaFile){
+      ROOT::TMetaUtils::Error(0,"Opening new capabilities file %s\n",capaFileName.c_str());
+      return 1;
+      }
+
+   for (std::list<std::string>::iterator lineIt=lines.begin();
+        lineIt!=lines.end();++lineIt){
+      capaFile << *lineIt;
+      }
+   return 0;
 }
 
 //______________________________________________________________________________
@@ -2417,47 +2517,85 @@ void manipForRootmap(std::string& name)
 }
 
 //______________________________________________________________________________
-void createRootMapFile(const std::string& rootmapFileName,
-                       const std::string& rootmapLibName,
-                       RScanner& scan)
-{
+void adjustRootMapNames(std::string& rootmapFileName,
+                        std::string& rootmapLibName){
+  
+   // If the rootmap file name does not exist, create one following the libname
+   // I.E. put into the directory of the lib the rootmap and within the rootmap the normalised path to the lib
+   if (rootmapFileName.empty()){
+      size_t libExtensionPos= rootmapLibName.find_last_of(gLibraryExtension) - gLibraryExtension.size() + 1;
+      rootmapFileName = rootmapLibName.substr(0,libExtensionPos) + ".rootmap";
+      size_t libCleanNamePos = rootmapLibName.find_last_of(gPathSeparator)+1;
+      rootmapLibName = rootmapLibName.substr(libCleanNamePos,std::string::npos);
+      ROOT::TMetaUtils::Info(0,"Rootmap file name %s built from rootmap lib name %s",
+                            rootmapLibName.c_str(),
+                            rootmapFileName.c_str());
+   } 
+}
 
-//    if (genreflex::verbose){
-//       std::cout << "*** genreflex: rootmapfile = "
-//                 << rootmapFileName
-//                 << " -- rootmaplib = "
-//                 << rootmapLibName << std::endl;
-//       }
+//______________________________________________________________________________
+int createRootMapFile(const std::string& rootmapFileName,
+                      const std::string& rootmapLibName,
+                      const std::list<std::string>& classesNames,
+                      const std::list<std::string>& nsNames)
+{
 
    // Create the rootmap file from the selected classes and namespaces
    std::ofstream rootmapFile(rootmapFileName.c_str());
+   if (!rootmapFile){
+      ROOT::TMetaUtils::Error(0,"Opening new rootmap file %s\n",rootmapFileName.c_str());
+      return 1;
+   }
+      
 
    // Preamble
    time_t rawtime;  
    time (&rawtime);
    rootmapFile << "# Automatically generated with genreflex on " << ctime(&rawtime);
-
-   // Loop on selected classes and insert them in the rootmap   
-   for (RScanner::ClassColl_t::const_iterator selClassesIter = scan.fSelectedClasses.begin();
-        selClassesIter!= scan.fSelectedClasses.end(); selClassesIter++){
-      std::string className(selClassesIter->GetNormalizedName());
-      manipForRootmap(className);
-      rootmapFile << "Library." << className << ": "
-                  << std::setw(35-className.size()) << rootmapLibName
+   
+   // Loop on selected classes and insert them in the rootmap
+   std::string thisClassName;
+   for (std::list<std::string>::const_iterator classNameIt=classesNames.begin();
+        classNameIt!=classesNames.end();++classNameIt){
+      thisClassName = *classNameIt;
+      manipForRootmap(thisClassName);
+      rootmapFile << "Library." << thisClassName << ": "
+                  << std::setw(35-classNameIt->size()) << rootmapLibName
                   << std::endl;   
       }
    
    // Same for namespaces
-   for (RScanner::NamespaceColl_t::const_iterator selNsIter = scan.fSelectedNamespaces.begin();
-        selNsIter!= scan.fSelectedNamespaces.end(); selNsIter++){
-      std::string className(ROOT::TMetaUtils::R__GetQualifiedName(* selNsIter->GetNamespaceDecl()));
-      manipForRootmap(className);
-      rootmapFile << "Library." << className << ": "
-                  << std::setw(35-className.size()) << rootmapLibName
-                  << std::endl;
-        }   
+   std::string thisNsName;
+   for (std::list<std::string>::const_iterator nsNameIt=nsNames.begin();
+        nsNameIt!=nsNames.end();++nsNameIt){
+      thisNsName=*nsNameIt ;
+      manipForRootmap(thisNsName);
+   rootmapFile << "Library." << thisNsName << ": "
+      << std::setw(35-nsNameIt->size()) << rootmapLibName
+      << std::endl;
+        }
+   return 0;
 }
 
+//_____________________________________________________________________________
+void extractSelectedClasses(RScanner& scan, std::list<std::string>& classesList){
+   // Loop on selected classes and put them in a list
+   for (RScanner::ClassColl_t::const_iterator selClassesIter = scan.fSelectedClasses.begin();
+        selClassesIter!= scan.fSelectedClasses.end(); selClassesIter++){
+      classesList.push_back(selClassesIter->GetNormalizedName());   
+   }
+}
+
+//_____________________________________________________________________________
+void extractSelectedNamespaces(RScanner& scan, std::list<std::string>& nsList){
+   // Loop on selected classes and put them in a list
+   for (RScanner::NamespaceColl_t::const_iterator selNsIter = scan.fSelectedNamespaces.begin();
+     selNsIter!= scan.fSelectedNamespaces.end(); selNsIter++){
+   nsList.push_back(ROOT::TMetaUtils::R__GetQualifiedName(* selNsIter->GetNamespaceDecl()));
+   }
+}
+
+//_____________________________________________________________________________
 
 // cross-compiling for iOS and iOS simulator (assumes host is Intel Mac OS X)
 #if defined(R__IOSSIM) || defined(R__IOS)
@@ -2476,15 +2614,100 @@ void createRootMapFile(const std::string& rootmapFileName,
 #endif
 
 //______________________________________________________________________________
+#include <stdio.h>
+// #include <cstdio>
+class tempFileNamesCatalog{
+   // Little helper class to bookkeep the files names which we want to make
+   // temporary.
+
+public:
+   //______________________________________________
+   tempFileNamesCatalog():m_size(0),m_emptyString(""){};
+
+   std::string getTmpFileName(const std::string& filename)
+   {
+      return filename + "_tmp";
+   }
+   //______________________________________________
+   void addFileName(std::string& nameStr){
+      // Adds the name and the associated temp name to the catalog.
+      // Changes the name into the temp name
+      if (nameStr.empty()) return;
+
+      std::string tmpNameStr(getTmpFileName(nameStr));
+      
+      // For brevity
+      const char* name(nameStr.c_str());     
+      const char* tmpName(tmpNameStr.c_str());
+      
+      m_names.push_back(nameStr);
+      m_tempNames.push_back(tmpNameStr);
+      ROOT::TMetaUtils::Info(0,"File %s added to the tmp catalog.\n", name);
+            
+      // This is to allow update of existing files
+      if (0 == std::rename( name , tmpName )){
+         ROOT::TMetaUtils::Info(0,"File %s existing. Preserved as %s.\n", name,tmpName);
+       }    
+
+      // To change the name to its tmp version
+      nameStr=tmpNameStr;
+       
+      m_size++;
+
+   }
+
+   //______________________________________________
+   int commit(){
+      int retval=0;
+      // rename the temp files into the normal ones
+      for (unsigned int i = 0; i < m_size; ++i){
+         const char* tmpName=m_tempNames[i].c_str();
+         const char* name=m_names[i].c_str();
+         // Check if the file exists
+         std::ifstream ifile(tmpName);
+         if (!ifile)
+            ROOT::TMetaUtils::Error(0, "Cannot find %s!\n", tmpName);       
+         
+         if ( 0 != std::rename( tmpName , name )){
+            ROOT::TMetaUtils::Error(0, "Renaming %s into %s!\n", tmpName , name);
+            retval++;
+         }
+      }
+      return retval;
+   }
+
+   //______________________________________________
+   const std::string& getFileName(const std::string& tmpFileName){
+      size_t i = std::distance(m_tempNames.begin(),
+                               find (m_tempNames.begin(), m_tempNames.end(), tmpFileName));
+      if (i==m_tempNames.size()) return m_emptyString;
+      return m_names[i];
+   }
+   
+   //______________________________________________
+   void dump(){
+      std::cout << "Restoring files in temporary file catalog:\n";
+      for (unsigned int i = 0; i < m_size; ++i){
+         std::cout <<  m_tempNames[i] << " --> " << m_names[i] << std::endl;
+      }
+   }
+   
+private:
+   unsigned int m_size;
+   const std::string m_emptyString;
+   std::vector<std::string> m_names;
+   std::vector<std::string> m_tempNames;
+};
+
+//______________________________________________________________________________
 int RootCling(int argc,
               char **argv,
-              const std::string& rootmapFileName="",
-              const std::string& rootmapLibName="",
               bool isDeep=false)
 {
+   
    if (argc < 2) {
       fprintf(stderr,
-              "Usage: %s [-v][-v0-4] [-f] [out.cxx] [-s sharedLibrary] [-m pcmfile] file1.h[+][-][!] file2.h[+][-][!]...[LinkDef.h]\n",
+              shortHelp,
               argv[0]);
       fprintf(stderr, "For more extensive help type: %s -h\n", argv[0]);
       return 1;
@@ -2501,7 +2724,7 @@ int RootCling(int argc,
    int verbosityLevel=0;
    ic = 1;
    if (!strcmp(argv[ic], "-v")) {
-      ROOT::TMetaUtils::gErrorIgnoreLevel = ROOT::TMetaUtils::kInfo; // The default is kError
+      ROOT::TMetaUtils::gErrorIgnoreLevel = ROOT::TMetaUtils::kError; // The default is kError
       ic++;
    } else if (!strcmp(argv[ic], "-v0")) {
       ROOT::TMetaUtils::gErrorIgnoreLevel = ROOT::TMetaUtils::kFatal; // Explicitly remove all messages
@@ -2567,7 +2790,7 @@ int RootCling(int argc,
       fprintf(stderr, "%s\n", rootClingHelp);
       return 1;
    } else if (ic < argc && !strncmp(argv[ic], "-",1)) {
-      fprintf(stderr,"Usage: %s [-v][-v0-4] [-f] [out.cxx] file1.h[+][-][!] file2.h[+][-][!]...[LinkDef.h]\n",
+      fprintf(stderr, shortHelp,
               argv[0]);
       fprintf(stderr,"Only one verbose flag is authorized (one of -v, -v0, -v1, -v2, -v3, -v4)\n"
               "and must be before the -f flags\n");
@@ -2592,6 +2815,9 @@ int RootCling(int argc,
    }
 #endif
 
+   // Store the temp files
+   tempFileNamesCatalog tmpCatalog;
+   
    if (ic < argc && (strstr(argv[ic],".C")  || strstr(argv[ic],".cpp") ||
        strstr(argv[ic],".cp") || strstr(argv[ic],".cxx") ||
        strstr(argv[ic],".cc") || strstr(argv[ic],".c++"))) {
@@ -2633,15 +2859,15 @@ int RootCling(int argc,
       if (strlen(argv[ic]) > (PATH_MAX-1)) {
          ROOT::TMetaUtils::Error(0, "rootcling: dictionary name too long (more than %d characters): %s\n",
                (PATH_MAX-1),argv[ic]);
-         CleanupOnExit(1);
          return 1;
       }
 
-      gDictsrcForCleanup = argv[ic];
       dictpathname = argv[ic];
       dictname = llvm::sys::path::filename(dictpathname);
 
-      fp = fopen(argv[ic], "w");
+      string tmpdictpathname(dictpathname);
+      tmpCatalog.addFileName(tmpdictpathname);
+      fp = fopen(tmpdictpathname.c_str(), "w");
       if (fp) fclose(fp);    // make sure file is created and empty
       ic++;
 
@@ -2675,18 +2901,46 @@ int RootCling(int argc,
 
    std::vector<std::string> baseModules;
    std::string sharedLibraryPathName;
+   std::string rootmapLibName;
+   std::string rootmapFileName;
+   std::string capaFileName;
+   
    int nextStart = 0;
    while (ic < argc) {
       if (*argv[ic] == '-' || *argv[ic] == '+') {
+
+         if (strcmp("-cap", argv[ic]) == 0 && (ic+1) < argc) {
+            // name of the capabilities file
+            capaFileName = argv[ic+1];
+            ic+=2;
+            continue;
+         }
+         
+         if (strcmp("-rml", argv[ic]) == 0 && (ic+1) < argc) {
+            // name of the lib for the rootmap
+            rootmapLibName = argv[ic+1];
+            ic+=2;
+            continue;
+         }
+
+         if (strcmp("-rmf", argv[ic]) == 0 && (ic+1) < argc) {
+            // name for the rootmap file
+            rootmapFileName = argv[ic+1];
+            ic+=2;
+            continue;
+         }
+         
          if (strcmp("-s", argv[ic]) == 0 && (ic+1) < argc) {
             // precompiled modules
             sharedLibraryPathName = argv[ic+1];
-            ++ic;
+            ic+=2;
+            continue;
          }
          if (strcmp("-m", argv[ic]) == 0 && (ic+1) < argc) {
             // precompiled modules
             baseModules.push_back(argv[ic+1]);
-            ++ic;
+            ic+=2;
+            continue;
          }
          if (strcmp("+P", argv[ic]) == 0 ||
              strcmp("+V", argv[ic]) == 0 ||
@@ -2699,7 +2953,6 @@ int RootCling(int argc,
             if (strcmp("-fPIC", argv[ic]) && strcmp("-fpic", argv[ic])
                 && strcmp("-p", argv[ic])) 
                {
-                  //std::cout << "Pushing to clingArgs " << argv[ic] << std::endl;
                   clingArgs.push_back(argv[ic]);
                }
          }
@@ -2708,6 +2961,7 @@ int RootCling(int argc,
       }
       ic++;
    }
+
    ic = nextStart;
    clingArgs.push_back(std::string("-I") + TMetaUtils::GetROOTIncludeDir(ROOTBUILDVAL));
 
@@ -2727,19 +2981,9 @@ int RootCling(int argc,
    clingArgs.push_back("-Xclang");
    clingArgs.push_back((dictname + ".h").c_str());
 
-   // Hack present for the root workshop: root6 preview distributed on an USB
-   // stick with SLC5 + gcc46.
-#ifdef R__GCC_TOOLCHAIN   
-   clingArgs.push_back("-gcc-toolchain");
-   clingArgs.push_back(R__GCC_TOOLCHAIN);
-   clingArgs.push_back("-cxx-isystem");
-   clingArgs.push_back(std::string(R__GCC_TOOLCHAIN) + "/include");
-   clingArgs.push_back("-I");
-   clingArgs.push_back(std::string(R__GCC_TOOLCHAIN) + "/include/c++/4.6.2");
-   clingArgs.push_back("-I");
-   clingArgs.push_back(std::string(R__GCC_TOOLCHAIN) + "/include/c++/4.6.2/x86_64-unknown-linux-gnu");
-#endif
-
+   // Add defines for the toolchain
+   AddGccToolChainDefines(clingArgs);
+   
    std::vector<const char*> clingArgsC;
    for (size_t iclingArgs = 0, nclingArgs = clingArgs.size();
         iclingArgs < nclingArgs; ++iclingArgs) {
@@ -2753,6 +2997,7 @@ int RootCling(int argc,
 #endif
    cling::Interpreter interp(clingArgsC.size(), &clingArgsC[0],
                              gResourceDir.c_str());
+   interp.enableRawInput(true);
    if (interp.declare("namespace std {} using namespace std;") != cling::Interpreter::kSuccess
 // CINT uses to define a few header implicitly, we need to do it explicitly.
        || interp.declare("#include <assert.h>\n"
@@ -2779,7 +3024,6 @@ int RootCling(int argc,
        ) {
       // There was an error.
       ROOT::TMetaUtils::Error(0,"Error loading the default header files.");
-      CleanupOnExit(1);
       return 1;
    }
 
@@ -2819,7 +3063,6 @@ int RootCling(int argc,
          linkdefLoc = i;
          if (i != argc-1) {
             ROOT::TMetaUtils::Error(0, "%s: %s must be last file on command line\n", argv[0], argv[i]);
-            CleanupOnExit(1);
             return 1;
          }
       }
@@ -2859,7 +3102,6 @@ int RootCling(int argc,
             } else if (!IsSelectionXml(argv[i]) && interp.declare(std::string("#include \"") + header + "\"\n")
                      != cling::Interpreter::kSuccess) {
                ROOT::TMetaUtils::Error(0, "%s: Linkdef compilation failure\n", argv[0]);
-               CleanupOnExit(1);
                return 1;
             }
          }
@@ -2868,7 +3110,6 @@ int RootCling(int argc,
 
    if (!firstInputFile) {
       ROOT::TMetaUtils::Error(0, "%s: no input files specified\n", argv[0]);
-      CleanupOnExit(1);
       return 1;
    }
 
@@ -2887,7 +3128,6 @@ int RootCling(int argc,
    modGen.ParseArgs(pcmArgs);
    if (!InjectModuleUtilHeader(argv[0], modGen, interp, true)
        || !InjectModuleUtilHeader(argv[0], modGen, interp, false)) {
-      CleanupOnExit(1);
       return 1;
    }
 
@@ -2902,7 +3142,7 @@ int RootCling(int argc,
       size_t pos = dictheader.rfind('.');
       if (pos != std::string::npos) dictheader.erase(pos);
       dictheader.append(".h");
-   }
+   }   
    std::string inclf(dictname);
    if (!inclf.empty()) {
       size_t pos = inclf.rfind('.');
@@ -2912,38 +3152,37 @@ int RootCling(int argc,
    // Check if code goes to stdout or rootcling file
    std::ofstream fileout;
    std::ofstream headerout;
+   string main_dictname(dictpathname);
    if (!dictpathname.empty()) {
+      dictpathname = tmpCatalog.getTmpFileName(dictpathname); // This one has already been registered.
       fileout.open(dictpathname.c_str());
       dictSrcOut = &fileout;
       if (!(*dictSrcOut)) {
          ROOT::TMetaUtils::Error(0, "rootcling: failed to open %s in main\n",
                dictpathname.c_str());
-         CleanupOnExit(1);
          return 1;
       }
+      tmpCatalog.addFileName(dictheader);
       headerout.open(dictheader.c_str());
       dictHdrOut = &headerout;
       if (!(*dictHdrOut)) {
          ROOT::TMetaUtils::Error(0, "rootcling: failed to open %s in main\n",
                dictheader.c_str());
-         CleanupOnExit(1);
          return 1;
       }
    } else {
       dictSrcOut = &std::cout;
       dictHdrOut = &std::cout;
    }
-
-   string main_dictname(dictpathname);
-   {
-      size_t dh = main_dictname.rfind('.');
-      if (dh != std::string::npos) {
-         main_dictname.erase(dh);
-      }
-      // Need to replace all the characters not allowed in a symbol ...
-      std::string main_dictname_copy(main_dictname);
-      TMetaUtils::GetCppName(main_dictname, main_dictname_copy.c_str());
+   
+   size_t dh = main_dictname.rfind('.');
+   if (dh != std::string::npos) {
+      main_dictname.erase(dh);
    }
+   // Need to replace all the characters not allowed in a symbol ...
+   std::string main_dictname_copy(main_dictname);
+   TMetaUtils::GetCppName(main_dictname, main_dictname_copy.c_str());
+
 
    time_t t = time(0);
    (*dictSrcOut) << "//"  << std::endl
@@ -2971,7 +3210,6 @@ int RootCling(int argc,
       bool found = Which(interp, argv[linkdefLoc], linkdefFilename);
       if (!found) {
          ROOT::TMetaUtils::Error(0, "%s: cannot open linkdef file %s\n", argv[0], argv[linkdefLoc]);
-         CleanupOnExit(1);
          return 1;
       }
    }
@@ -3001,7 +3239,6 @@ int RootCling(int argc,
 
       if (!ldefr.LoadIncludes(extraIncludes)) {
          ROOT::TMetaUtils::Error(0,"Error loading the #pragma extra_include.");
-         CleanupOnExit(1);
          return 1;
       }
    } else if (isSelXML) {
@@ -3014,7 +3251,7 @@ int RootCling(int argc,
 
          XMLReader xmlr(interp);
          if (!xmlr.Parse(file, selectionRules)) {
-            ROOT::TMetaUtils::Error(0,"Parsing XML file %s",linkdefFilename.c_str());
+            ROOT::TMetaUtils::Error(0,"Parsing XML file %s\n",linkdefFilename.c_str());
          }
          else {
             ROOT::TMetaUtils::Info(0,"XML file successfully parsed\n");
@@ -3052,7 +3289,6 @@ int RootCling(int argc,
 
       if(! ldefr.LoadIncludes(extraIncludes) ) {
          ROOT::TMetaUtils::Error(0,"Error loading the #pragma extra_include.");
-         CleanupOnExit(1);
          return 1;
       }
    } else {
@@ -3134,7 +3370,6 @@ int RootCling(int argc,
    if (has_input_error) {
       // Be a little bit makefile friendly and remove the dictionary in case of error.
       // We could add an option -k to keep the file even in case of error.
-      CleanupOnExit(1);
       exit(1);
    }
 
@@ -3191,7 +3426,6 @@ int RootCling(int argc,
 
          if (CRD) {
             ROOT::TMetaUtils::Info(0,"Generating code for class %s\n", iter->GetNormalizedName() );
-            std::string qualname( CRD->getQualifiedNameAsString() );
             if (TMetaUtils::IsStdClass(*CRD) && 0 != TClassEdit::STLKind(CRD->getName().str().c_str() /* unqualified name without template arguement */) ) {
                // coverity[fun_call_w_exception] - that's just fine.
                RStl::Instance().GenerateTClassFor( iter->GetNormalizedName(), CRD, interp, normCtxt);
@@ -3267,7 +3501,7 @@ int RootCling(int argc,
    // compatibility.
    (*dictHdrOut) << "/********************************************************************\n";
 
-   (*dictHdrOut) << "* " << dictheader << "\n";
+   (*dictHdrOut) << "* " << tmpCatalog.getFileName(dictheader) << "\n";
    (*dictHdrOut) << "* CAUTION: DON'T CHANGE THIS FILE. THIS FILE IS AUTOMATICALLY GENERATED\n";
    (*dictHdrOut) << "*          FROM HEADER FILES LISTED IN 'DictInit::headers'.\n";
    (*dictHdrOut) << "*          CHANGE THOSE HEADER FILES AND REGENERATE THIS FILE.\n";
@@ -3324,16 +3558,53 @@ int RootCling(int argc,
       }
    }
 
-   CleanupOnExit(0);
+   // Create rootmap and capabilities files
+   bool rootMapNeeded = !rootmapFileName.empty() || !rootmapLibName.empty();
+   bool capaNeeded=!capaFileName.empty();
 
-   // Create the rootmapfile if needed
-   if (!rootmapFileName.empty()){
-      createRootMapFile(rootmapFileName,
-                        rootmapLibName,
-                        scan);
+   std::list<std::string> classesNames;
+   std::list<std::string> nsNames;
+
+   if (rootMapNeeded || capaNeeded){
+      extractSelectedClasses(scan,classesNames);
+   }
+   if (rootMapNeeded){      
+      extractSelectedNamespaces(scan,nsNames);
    }
    
-   return 0;
+   
+   // Create the rootmapfile if needed
+   if (rootMapNeeded){
+      adjustRootMapNames(rootmapFileName,
+                         rootmapLibName);
+      ROOT::TMetaUtils::Info(0,"Rootmap file name %s and lib name %s\n",
+                             rootmapLibName.c_str(),
+                             rootmapFileName.c_str());
+      tmpCatalog.addFileName(rootmapFileName);
+      int rmStatusCode= createRootMapFile(rootmapFileName,
+                                          rootmapLibName,
+                                          classesNames,
+                                          nsNames);
+      if (0!=rmStatusCode) return 1;
+   }
+
+   // Create the capabilities file if needed
+   if (capaNeeded){
+      tmpCatalog.addFileName(capaFileName);
+      int capaStatusCode = createCapabilitiesFile(capaFileName,
+                                                  dictpathname,
+                                                  classesNames);
+      if (0!=capaStatusCode) return 1;
+   }
+
+      
+   if (genreflex::verbose)
+      tmpCatalog.dump();
+   
+   // Before returning, rename the files
+   return tmpCatalog.commit();
+
+   
 }
 
 namespace genreflex{
@@ -3389,42 +3660,16 @@ unsigned int extractArgs(int argc, char** argv, std::vector<std::string>& args)
    // Extract the arguments from the command line
    
    // loop on argv, spot strings which are not preceeded by something
-   // starting with "-" and do not start with "-"
-//    std::vector<unsigned int> argsIndeces;
    unsigned int argvCounter=0;
    for (int i=1;i<argc;++i){
       if (!beginsWith(argv[i-1],"-") && // so, if preceeding element starts with -, this is a value for an option
           !beginsWith(argv[i],"-")){ // and the element itself is not an option
-//          argsIndeces.push_back(i);
-         args.push_back(argv[i]);         
+         args.push_back(argv[i]);
          argvCounter++;
-         }
+      } else  if (argvCounter) {
+         argv[i-argvCounter] = argv[i];
+      }
    }
-
-//    // now create a new argv w/o the arguments, adapt argc
-//    int newArgc = argc - argsIndeces.size();
-//    std::vector<char*> newArgv (newArgc);
-//    unsigned int argvCounter=0;
-//    for (int i=0;i<argc;++i){
-//       // if index was NOT the one of an arg,copy in argv
-//       if (count (argsIndeces.begin(), argsIndeces.end(), i) == 0){
-//          newArgv[argvCounter]=argv[i];
-//          argvCounter++;
-//       }
-//    }
-
-   // Some debug
-//    if (genreflex::verbose){
-//      std::cout << "Old commandline: \n";
-//      for (int i=0;i<argc;++i){
-//         std::cout << i << ") " << argv[i] << std::endl;
-//      }     
-//    }
-   
-//    // Assign to argv now
-//    for (int i=0;i<newArgc;++i){
-//       argv[i]=newArgv[i];
-//       }
 
    // Some debug
    if (genreflex::verbose){
@@ -3438,10 +3683,6 @@ unsigned int extractArgs(int argc, char** argv, std::vector<std::string>& args)
 
    }
 
-//    for (int i=0;i<argc;++i){
-//       std::cout << argv << ": " << &argv[i] << " = " << argv[i] << std::endl;
-//    }
-//    
    return argvCounter;
 }
 
@@ -3543,38 +3784,67 @@ int invokeRootCling(const std::string& verbosity,
                     const std::vector<std::string>& preprocUndefines,
                     const std::string& rootmapFileName,
                     const std::string& rootmapLibName,
+                    const std::string& capaFileName,
                     bool isDeep,
                     const std::vector<std::string>& headersNames,
                     const std::string& ofilename){
 
    // Prepare and invoke the commandline to invoke rootcling
-   // Adjust the name of the rootmap lib if not previously set
-
-   // compute the number of arguments
-   // 1) required: rootcling
-   // 2) required: verbosity
-   // 3) required: force rewrite
-   // 4) required: output file name
-   // 5) N pcms to be loaded before any header
-   // 6) M headers (at least 1 required)
-   // 7) optional: A selection file
-   // 8) optional: A target library file
-   // 9) optional: 2*K other options of type -I, -U, -D
-
 
    std::vector<char*> argvVector;
-   argvVector.reserve(7 + // 5 required, 2 optional
-                      (headersNames.size()-1) + // 1 header already counted
-                      pcmsNames.size()*2+ // -m pcmName N times => 2N
-                      includes.size()*2+  // -I include.h
-                      preprocDefines.size()*2+ // -D
-                      preprocUndefines.size()*2); // -U
 
    argvVector.push_back(string2charptr("rootcling"));
    argvVector.push_back(string2charptr(verbosity));
    argvVector.push_back(string2charptr("-f"));
    argvVector.push_back(string2charptr(ofilename));
 
+   // Rootmaps
+
+   // Prepare the correct rootmap libname if not already set.
+   std::string newRootmapLibName(rootmapLibName);
+   if (!rootmapFileName.empty() && newRootmapLibName.empty()){
+         if (headersNames.size() != 1){
+               ROOT::TMetaUtils::Warning(0,
+            "*** genreflex: No rootmap lib and several header specified!\n");
+      }
+      std::string cleanHeaderName;
+      extractFileName(headersNames[0],cleanHeaderName);
+      newRootmapLibName = "lib";
+      newRootmapLibName+=cleanHeaderName;
+      changeExtension(newRootmapLibName,gLibraryExtension);
+   }
+
+   // Prepend to the rootmap the designed directory of the dictionary
+   // if no path is specified for the rootmap itself
+   std::string dictLocation("");
+   std::string newRootmapFileName(rootmapFileName);
+   if (!newRootmapFileName.empty()){
+      extractFilePath(newRootmapFileName,dictLocation);
+      if (dictLocation.empty()){ //Add it. In the worst case it's ./
+         extractFilePath(ofilename,dictLocation);
+         newRootmapFileName = dictLocation+newRootmapFileName;
+      }
+   }
+
+   
+   // RootMap filename 
+   if (!newRootmapFileName.empty()){
+      argvVector.push_back(string2charptr("-rmf"));
+      argvVector.push_back(string2charptr(newRootmapFileName));
+   }
+   
+   // RootMap Lib filename 
+   if (!newRootmapLibName.empty()){
+      argvVector.push_back(string2charptr("-rml"));
+      argvVector.push_back(string2charptr(newRootmapLibName));
+   }
+
+   // Capabilities file
+   if (!capaFileName.empty()){
+      argvVector.push_back(string2charptr("-cap"));
+      argvVector.push_back(string2charptr(capaFileName));
+   }   
+   
    if (!targetLibName.empty()){
       argvVector.push_back(string2charptr("-s"));
       argvVector.push_back(string2charptr(targetLibName));
@@ -3601,34 +3871,14 @@ int invokeRootCling(const std::string& verbosity,
       for (int i=0;i<argc;i++)
          std::cout << i << ") " << argvVector[i] <<std::endl;
    }
-
-   // Prepare the correct rootmap libname if not already set.
-   std::string newRootmapLibName(rootmapLibName);
-   if (!rootmapFileName.empty() && newRootmapLibName.empty()){
-      if (headersNames.size() != 1){
-         ROOT::TMetaUtils::Warning(0,
-            "*** genreflex: No rootmap lib and several header specified!\n");
-      }
-      std::string cleanHeaderName;
-      extractFileName(headersNames[0],cleanHeaderName);
-      newRootmapLibName = "lib";
-      newRootmapLibName+=cleanHeaderName;
-      changeExtension(newRootmapLibName,".so");
-   }
-
-   // Prepend to the rootmap the directory of the directory of the header
-   std::string headerLocation("");
-   extractFilePath(ofilename,headerLocation); 
    
    char** argv =  & (argvVector[0]);
    int rootclingReturnCode = RootCling(argc,
                                        argv,
-                                       headerLocation+rootmapFileName,
-                                       newRootmapLibName,
                                        isDeep);
-
+   
    for (int i=0;i<argc;i++)
-      delete argvVector[i];
+      delete [] argvVector[i];
 
    return rootclingReturnCode;
 
@@ -3643,7 +3893,8 @@ int invokeManyRootCling(const std::string& verbosity,
                         const std::vector<std::string>& preprocDefines,
                         const std::vector<std::string>& preprocUndefines,
                         const std::string& rootmapFileName,
-                        const std::string& rootmapLibName,                        
+                        const std::string& rootmapLibName,
+                        const std::string& capaFileName,
                         bool isDeep,
                         const std::vector<std::string>& headersNames,
                         const std::string& outputDirName_const="")
@@ -3671,7 +3922,8 @@ int invokeManyRootCling(const std::string& verbosity,
                                        preprocDefines,
                                        preprocUndefines,
                                        rootmapFileName,
-                                       rootmapLibName,                                       
+                                       rootmapLibName,
+                                       capaFileName,
                                        isDeep,
                                        namesSingleton,
                                        outputDirName+ofilesNames[i]);
@@ -3738,8 +3990,11 @@ int GenReflex(int argc, char **argv)
    // --fail_on_warning                   Wrap ROOT::TMetaUtils::Warning and throw if selected
    //
    // New arguments:
-   // -l --library targetLib name         -l  targetLib name
-   // -m pcmname (can be many -m)         -m pcmname (can be many -m)
+   // -l --library targetLib name (new)   -s  targetLib name
+   // -m pcmname (can be many -m) (new)   -m pcmname (can be many -m)
+   // --rootmap                           -rmf (new)
+   // --rootmap-lib                       -rml (new)
+   // -c --capabilities                   -cap (new)
    //
    // genreflex options which rise warnings (feedback is desirable)
    // -c, --capabilities (should not be needed with the new plufing system)
@@ -3756,8 +4011,6 @@ int GenReflex(int argc, char **argv)
    // Exceptions
    // The --deep option of genreflex is passed as function parameter to rootcling
    // since it's not needed at the moment there.
-   // Same is for the -I, -D and -U options.
-
 
    using namespace genreflex;
 
@@ -3871,12 +4124,18 @@ int GenReflex(int argc, char **argv)
         option::FullArg::Required,
         rootmapUsage},
 
-        {ROOTMAPLIB,
+      {ROOTMAPLIB,
         STRING ,
         "" , "rootmap-lib" ,
         option::FullArg::Required,
         rootmapLibUsage},
 
+      {CAPABILITIESFILENAME,
+        STRING ,
+        "c" , "capabilities" ,
+        option::FullArg::Required,
+        "-c, --capabilities\t Name of the output capabilities file"},
+        
       {PCMFILENAME,
         STRING ,
         "m" , "" ,
@@ -3927,12 +4186,6 @@ int GenReflex(int argc, char **argv)
         ""},
         
       // Options that rise warnings
-      {CAPABILITIESFILENAME,
-        STRING ,
-        "c" , "capabilities" ,
-        option::FullArg::Required,
-        ""},
-
       {NOMEMBERTYPEDEFS,
         STRING ,
         "" , "no_membertypedefs" ,
@@ -3953,8 +4206,8 @@ int GenReflex(int argc, char **argv)
    // The only args are the headers here
    const int extractedArgs = extractArgs(argc,argv,headersNames); 
 
-   const int offset = 1 + extractedArgs; // skip argv[0] and the headers
-   argc-=offset;
+   const int offset = 1; // skip argv[0]
+   argc-=offset+extractedArgs;
    argv+=offset;
 
    // Parse the options
@@ -3964,9 +4217,7 @@ int GenReflex(int argc, char **argv)
    // The 4 is the minimum size of the abbreviation lenght.
    // For example, --selction_file can be abbreviated with --sele at least.
 
-   std::cout << "Parsing\n";
    option::Parser parse(genreflexUsageDescriptor, argc, argv, &options[0], &buffer[0], 5);
-   std::cout << "Parsing END\n";
    
    if (parse.error()){
       ROOT::TMetaUtils::Error(0, "*** genreflex: Argument parsing error!\n");
@@ -3986,16 +4237,16 @@ int GenReflex(int argc, char **argv)
       }
 
    // Warnings:
-   RiseWarningIfPresent(options,CAPABILITIESFILENAME,"Capabilities files");
    RiseWarningIfPresent(options,NOMEMBERTYPEDEFS,"Exclusion of member typedefs");
    RiseWarningIfPresent(options,NOTEMPLATETYPEDEFS,"Exclusion of template typedefs");
 
    // The verbosity: debug wins over quiet
-   std::string verbosityOption("-v4"); // Changed for the testing phase. It should be -v
+   std::string verbosityOption("-v4"); // To be uncommented for the testing phase. It should be -v
+   //std::string verbosityOption("-v");
    if (options[QUIET]) verbosityOption="-v0";
    if (options[DEBUG]) verbosityOption="-v4";
 
-   genreflex::verbose=verbosityOption=="-v4";
+   genreflex::verbose= verbosityOption=="-v4";
 
    // The selection file
    std::string selectionFileName;
@@ -4019,9 +4270,10 @@ int GenReflex(int argc, char **argv)
    std::string targetLibName;
    if (options[TARGETLIB]){
       targetLibName = options[TARGETLIB].arg;
-      if (!endsWith(targetLibName, ".so")){
+      if (!endsWith(targetLibName, gLibraryExtension)){
          ROOT::TMetaUtils::Error(0,
-            "*** genreflex: Invalid target library extension: filename is %s and extension .so is expected!\n",
+            "*** genreflex: Invalid target library extension: filename is %s and extension %s is expected!\n",
+            gLibraryExtension.c_str(),
             targetLibName.c_str());
       }
       // Target lib has precedence over rootmap lib
@@ -4031,10 +4283,13 @@ int GenReflex(int argc, char **argv)
    // If the rootmaplib is not set, set one 
 
    // Add the .so extension to the rootmap lib if not there
-   if (!rootmapLibName.empty() && !endsWith(rootmapLibName,".so")){
-      rootmapLibName+=".so";
+   if (!rootmapLibName.empty() && !endsWith(rootmapLibName,gLibraryExtension)){
+      rootmapLibName+=gLibraryExtension;
    }
 
+   // Capabilities file
+   std::string capaFileName(options[CAPABILITIESFILENAME].arg ? options[CAPABILITIESFILENAME].arg : "");
+   
    // The list of pcms to be preloaded
    std::vector<std::string> pcmsNames;
    extractMultipleOptions(options,PCMFILENAME, pcmsNames);
@@ -4077,6 +4332,7 @@ int GenReflex(int argc, char **argv)
                                     preprocUndefines,
                                     rootmapFileName,
                                     rootmapLibName,
+                                    capaFileName,
                                     isDeep,
                                     headersNames,
                                     ofileName);
@@ -4091,6 +4347,7 @@ int GenReflex(int argc, char **argv)
                                         preprocUndefines,
                                         rootmapFileName,
                                         rootmapLibName,
+                                        capaFileName,
                                         isDeep,
                                         headersNames,
                                         ofileName);

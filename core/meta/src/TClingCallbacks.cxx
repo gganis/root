@@ -197,6 +197,41 @@ bool TClingCallbacks::LookupObject(const DeclContext* DC, DeclarationName Name){
    return false;
 }
 
+bool TClingCallbacks::LookupObject(clang::TagDecl* Tag) {
+   if (ClassTemplateSpecializationDecl* Specialization 
+       = dyn_cast<ClassTemplateSpecializationDecl>(Tag)) {
+      Sema &SemaR = m_Interpreter->getSema();
+      ASTContext& C = SemaR.getASTContext();
+      Preprocessor &PP = SemaR.getPreprocessor();
+      Parser& P = const_cast<Parser&>(m_Interpreter->getParser());
+      Preprocessor::CleanupAndRestoreCacheRAII cleanupRAII(PP);
+      Parser::ParserCurTokRestoreRAII savedCurToken(P);
+      // After we have saved the token reset the current one to something which 
+      // is safe (semi colon usually means empty decl)
+      Token& Tok = const_cast<Token&>(P.getCurToken());
+      Tok.setKind(tok::semi);
+
+      // We can't PushDeclContext, because we go up and the routine that pops 
+      // the DeclContext assumes that we drill down always.
+      // We have to be on the global context. At that point we are in a 
+      // wrapper function so the parent context must be the global.
+      Sema::ContextAndScopeRAII pushedDCAndS(SemaR, C.getTranslationUnitDecl(), 
+                                             SemaR.TUScope);
+      std::string Name;
+      llvm::raw_string_ostream strStream(Name);
+      PrintingPolicy Policy(m_Interpreter->getCI()->getLangOpts());
+      Specialization->getNameForDiagnostic(strStream, Policy, /*Qualified*/true);
+      strStream.flush();
+                     
+      // This would mean it is probably a template. Try autoload template.
+      if (TCling__AutoLoadCallback(Name.c_str())) {
+         return true;
+      }
+   }
+   return false;
+}
+
+
 // The symbol might be defined in the ROOT class autoloading map so we have to
 // try to autoload it first and do secondary lookup to try to find it.
 //
@@ -230,16 +265,13 @@ bool TClingCallbacks::tryAutoloadInternal(llvm::StringRef Name, LookupResult &R,
         // Save state of the PP
         ASTContext& C = SemaR.getASTContext();
         Preprocessor &PP = SemaR.getPreprocessor();
-        Preprocessor::CleanupAndRestoreCacheRAII cleanupRAII(PP);
         Parser& P = const_cast<Parser&>(m_Interpreter->getParser());
+        Preprocessor::CleanupAndRestoreCacheRAII cleanupRAII(PP);
         Parser::ParserCurTokRestoreRAII savedCurToken(P);
         // After we have saved the token reset the current one to something which 
         // is safe (semi colon usually means empty decl)
         Token& Tok = const_cast<Token&>(P.getCurToken());
         Tok.setKind(tok::semi);
-
-        bool oldSuppressDiags = SemaR.getDiagnostics().getSuppressAllDiagnostics();
-        SemaR.getDiagnostics().setSuppressAllDiagnostics();
 
         // We can't PushDeclContext, because we go up and the routine that pops 
         // the DeclContext assumes that we drill down always.
@@ -267,9 +299,7 @@ bool TClingCallbacks::tryAutoloadInternal(llvm::StringRef Name, LookupResult &R,
            fDeclContextToLookIn = NSD;
            R.addDecl(NSD);
            lookupSuccess = true;
-        }
- 
-        SemaR.getDiagnostics().setSuppressAllDiagnostics(oldSuppressDiags);
+        } 
      }
 
      fIsAutoloadingRecursively = false;
@@ -564,4 +594,14 @@ void TClingCallbacks::TransactionUnloaded(const Transaction &T) {
 }
 
 void TClingCallbacks::DeclDeserialized(const clang::Decl* D) {
+   if (const RecordDecl* RD = dyn_cast<RecordDecl>(D)) {
+      // FIXME: Our autoloading doesn't work (load the library) when the looked
+      // up decl is found in the PCH/PCM. We have to do that extra step, which
+      // loads the corresponding library when a decl was deserialized.
+      //
+      // Unfortunatelly we cannot do that with the current implementation,
+      // because the library load will pull in the header files of the library
+      // as well, even though they are in the PCH/PCM and available.
+      (void)RD;//TCling__AutoLoadCallback(RD->getNameAsString().c_str());
+   }
 }

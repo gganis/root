@@ -1,4 +1,4 @@
-#! /bin/sh
+#!/bin/bash
 #
 # A (not so) simple configure script.
 #
@@ -27,6 +27,7 @@ altcc=
 altcxx=
 altf77=
 altld=
+altccset=
 gcctoolchain=
 host=
 
@@ -193,6 +194,9 @@ rm -f $logfile
 envvars="
 THREAD           \
 ZLIB             \
+LIBTIFF          \
+LIBJPEG          \
+LIBPNG           \
 LZMA             \
 OPENGL           \
 MYSQL            \
@@ -382,14 +386,14 @@ check_libcompat() {
 
     case $arch in
     macosx)
-        logmsg " lipo -info $chklibcompat | grep ' i386'"
-        if lipo -info $chklibcompat | grep ' i386' > /dev/null 2>& 1 ; then
+        logmsg " lipo $chklibcompat -verify_arch i386"
+        if lipo $chklibcompat -verify_arch i386 ; then
             ret=1
         fi
         ;;
     macosx64)
-        logmsg " lipo -info $chklibcompat | grep ' x86_64'"
-        if lipo -info $chklibcompat | grep ' x86_64' > /dev/null 2>& 1 ; then
+        logmsg " lipo $chklibcompat -verify_arch x86_64"
+        if lipo $chklibcompat -verify_arch x86_64 ; then
             ret=1
         fi
         ;;
@@ -1613,6 +1617,7 @@ with options, prefix with --with-, enables corresponding support
   globus-libdir      Globus support, location of globus libraries
   hdfs-incdir        HDFS support, location of hdfs.h
   hdfs-libdir        HDFS support, location of libhdfs
+  iosvers            iOS SDK version (6.1, 7.0), default will be latest SDK
   jni-incdir         HDFS support, location of JNI headers
   jvm-libdir         HDFS support, location of JVM library
   krb5               Kerberos5 support, location of Kerberos distribution
@@ -1621,6 +1626,7 @@ with options, prefix with --with-, enables corresponding support
   ldap-incdir        LDAP support, location of ldap.h
   ldap-libdir        LDAP support, location of libldap
   llvm-config        LLVM/clang for cling, location of llvm-config script
+  macosxvers         OS X SDK version (10.8, 10.9), default will be latest SDK
   monalisa-incdir    Monalisa support, location of ApMon.h
   monalisa-libdir    Monalisa support, location of libapmoncpp
   mysql-incdir       MySQL support, location of mysql.h
@@ -1781,15 +1787,29 @@ solaris64CC5)
    checklib64="yes" ;;
 macosx*)
    logmsg "Will check for compatible libraries"
-   checklibcompat="yes" ;;
+   checklibcompat="yes"
+   if test "x$macosxvers" = "x"; then
+      # get most recent SDK version
+      macosxminor=`sw_vers | sed -n 's/ProductVersion://p' | cut -d . -f 2`
+      macosxvers=10.$macosxminor
+      # make available to conftest.mk scripts
+      export MACOSXVERS=$macosxvers
+   fi
+   ;;
 ios*)
    logmsg "Will check iOS SDK libraries"
    message "Checking for iOS SDK"
-   iossdk=`make -s -f ${ac_srcdir}/config/Makefile.$arch CONFIGURE=yes showsdk`
+   if test "x$iosvers" = "x"; then
+      # get most recent SDK version
+      iosvers=`xcodebuild -showsdks | sed -n '/iphoneos/s/.*iOS //p' | sed 's/ .*//'|awk 'END{print}'`
+   fi
+   xcodepath=`/usr/bin/xcode-select -print-path`
+   iossdk=$xcodepath/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS$iosvers.sdk
    result "$iossdk"
    if [ ! -d $iossdk ]; then
        result "`basename $0`: no iOS SDK found at $iossdk"
        result "Run "xcode-select" to update the developer directory path"
+       result "or make sure the desired SDK version is installed"
        exit 1
    fi
    enable_genvector="no"
@@ -1958,6 +1978,7 @@ if test $# -gt 0 ; then
       --with-gccxml=*)         gccxml=$optarg        ;;
       --with-hdfs-incdir=*)    hdfsincdir=$optarg    ; enable_hdfs="yes"    ;;
       --with-hdfs-libdir=*)    hdfslibdir=$optarg    ; enable_hdfs="yes"    ;;
+      --with-iosvers=*)        iosvers=$optarg       ;;
       --with-jni-incdir=*)     jniincdir=$optarg     ;;
       --with-jvm-libdir=*)     jvmlibdir=$optarg     ;;
       --with-krb5=*)           krb5dir=$optarg       ; enable_krb5="yes"    ;;
@@ -1966,6 +1987,7 @@ if test $# -gt 0 ; then
       --with-ldap-incdir=*)    ldapincdir=$optarg    ; enable_ldap="yes"    ;;
       --with-ldap-libdir=*)    ldaplibdir=$optarg    ; enable_ldap="yes"    ;;
       --with-llvm-config=*)    llvmconfig=$optarg    ; enable_builtin_llvm=no;;
+      --with-macosxvers=*)     macosxvers=$optarg    ;;
       --with-mysql-incdir=*)   mysqlincdir=$optarg   ; enable_mysql="yes"   ;;
       --with-mysql-libdir=*)   mysqllibdir=$optarg   ; enable_mysql="yes"   ;;
       --with-monalisa-incdir=*)monalisaincdir=$optarg; enable_monalisa="yes";;
@@ -2012,7 +2034,7 @@ if test $# -gt 0 ; then
       --with-xrootd=*)         xrootddir=$optarg     ; enable_xrootd="yes"  ;;
       --with-xrootd-incdir=*)  xrdincdir=$optarg     ; enable_xrootd="yes"  ;;
       --with-xrootd-libdir=*)  xrdlibdir=$optarg     ; enable_xrootd="yes"  ;;
-      --with-cc=*)             altcc=$optarg         ;;
+      --with-cc=*)             altcc=$optarg         ; altccset=1           ;;
       --with-cxx=*)            altcxx=$optarg        ;;
       --with-f77=*)            altf77=$optarg        ;;
       --with-ld=*)             altld=$optarg         ;;
@@ -2295,6 +2317,13 @@ gcctoolchainconf="/**/"
 if test "x$gcctoolchain" != "x"; then
    setgcctoolchain="define"
    gcctoolchainconf=\"$gcctoolchain\"
+   if test "x$altccset" != "x" ; then
+      gccincdirs=`echo "#include <bogus.h>" | ${altcc} -xc++ -E -v - 2>&1 >/dev/null | awk '/^#include </,/^End of search/{if (!/^#include </ && !/^End of search/){ print }}'`
+      gccincdirarr=(${gccincdirs// / })
+   else
+      result "`basename $0`: no alternative gcc compiler specified, incompatible with --with-gcc-toolchain option"
+      exit 1
+   fi
 fi
 
 ######################################################################
@@ -2354,10 +2383,14 @@ if test "x$enable_cxx11" = "xyes"; then
     check_cxxopt -std=c++11
     if test $cxxopt_result -eq 0 ; then
         enable_cxx11="no"
-	result "no"
+        result "no"
     else
-	usecxx11="define"
-	result "yes"
+        usecxx11="define"
+        # on OS X libcxx11 is required for C++11 support so turn the option on
+        if test "x$platform" = "xmacosx"; then
+            enable_libcxx11="yes"
+        fi
+        result "yes"
     fi
 fi
 
@@ -2464,11 +2497,13 @@ if test "x$enable_cocoa" = "xyes"; then
     enable_x11="no"
     result "yes"
     message "Checking for OSX SDK"
-    osxsdk=`make -s -f ${ac_srcdir}/config/Makefile.$arch CONFIGURE=yes showsdk`
+    xcodepath=`/usr/bin/xcode-select -print-path`
+    osxsdk=$xcodepath/Platforms/MacOSX.platform/Developer/SDKs/MacOSX$macosxvers.sdk
     result "$osxsdk"
     if [ ! -d $osxsdk ]; then
         result "`basename $0`: no OSX SDK found at $osxsdk"
         result "Run "xcode-select" to update the developer directory path"
+        result "or make sure the desired SDK version is installed"
         exit 1
     else
 	openglincdir=${osxsdk}/System/Library/Frameworks/OpenGL.framework/Headers
@@ -4298,11 +4333,13 @@ if test ! "x$enable_asimage" = "xno" ; then
     # to avoid system versions based on X11. 
     if test "x$enable_builtin_afterimage" = "xyes" && test ! "x$enable_cocoa" = "xyes"; then
        check_header "jpeglib.h" "" \
+          ${LIBJPEG:+$LIBJPEG/include} \
           $ASIMAGE ${ASIMAGE:+$ASIMAGE/include} \
           ${finkdir:+$finkdir/include} \
           /usr/local/include /usr/include /opt/include
        asjpegincdir=$found_dir
        check_header "png.h" "" \
+          ${LIBPNG:+$LIBPNG/include} \
           $ASIMAGE ${ASIMAGE:+$ASIMAGE/include} \
           ${ASPNG:+$ASPNG/include} \
           ${finkdir:+$finkdir/include} \
@@ -4311,6 +4348,7 @@ if test ! "x$enable_asimage" = "xno" ; then
        aspngincdir=$found_dir
        if test ! "x$enable_astiff" = "xno" ; then
            check_header "tiffio.h" "" \
+               ${LIBTIFF:+$LIBTIFF/include} \
                $ASIMAGE ${ASIMAGE:+$ASIMAGE/include} \
                ${finkdir:+$finkdir/include} \
                /usr/local/include /usr/include /opt/include
@@ -4332,6 +4370,8 @@ if test ! "x$enable_asimage" = "xno" ; then
        fi
        for k in $aslibs ; do
            check_library $k "$enable_shared" "" \
+               ${LIBJPEG:+$LIBJPEG/lib} ${LIBPNG:+$LIBPNG/lib} \
+               ${LIBTIFF:+$LIBTIFF/lib} ${ZLIB:+$ZLIB/lib} \
                $ASIMAGE ${ASIMAGE:+$ASIMAGE/lib} ${ASPNG:+$ASPNG/lib} \
                ${finkdir:+$finkdir/lib} \
                /usr/local/lib /usr/X11/lib /usr/lib /opt/lib
@@ -6792,6 +6832,8 @@ sed -e "s|@globusincdir@|$globusincdir|"        \
     -e "s|@hdfsincdir@|$hdfsincdir|"            \
     -e "s|@hdfslib@|$hdfslib|"                  \
     -e "s|@hdfslibdir@|$hdfslibdir|"            \
+    -e "s|@iossdk@|$iossdk|"                    \
+    -e "s|@iosvers@|$iosvers|"                  \
     -e "s|@iconpath@|$iconpath|"                \
     -e "s|@incdir@|$incdir|"                    \
     -e "s|@jniincdir@|$jniincdir|g"             \
@@ -6808,6 +6850,7 @@ sed -e "s|@globusincdir@|$globusincdir|"        \
     -e "s|@ldflags@||"                          \
     -e "s|@libdir@|$libdir|"                    \
     -e "s|@llvmconfig@|$llvmconfig|"            \
+    -e "s|@macosxvers@|$macosxvers|"            \
     -e "s|@macrodir@|$macrodir|"                \
     -e "s|@mandir@|$mandir|"                    \
     -e "s|@mkliboption@|$mkliboption|"          \
@@ -6841,6 +6884,7 @@ sed -e "s|@globusincdir@|$globusincdir|"        \
     -e "s|@oracleincdir@|$oracleincdir|"        \
     -e "s|@oraclelib@|$oraclelib|"              \
     -e "s|@oraclelibdir@|$oraclelibdir|"        \
+    -e "s|@osxsdk@|$osxsdk|"                    \
     -e "s|@pgsqlincdir@|$pgsqlincdir|"          \
     -e "s|@pgsqllib@|$pgsqllib|"                \
     -e "s|@pgsqllibdir@|$pgsqllibdir|"          \
@@ -7012,6 +7056,24 @@ sed \
     -e "s|@gcctoolchain@|$gcctoolchainconf|"   \
     < RConfigure.tmp > RConfigure-out.tmp
 rm -f RConfigure.tmp
+
+if test ! "x${gccincdirarr[0]}" = "x"; then
+    echo "#ifndef ROOT_RConfigure_GCC" >> RConfigure-out.tmp
+    echo "#define ROOT_RConfigure_GCC" >> RConfigure-out.tmp
+    k=0
+    for i in "${!gccincdirarr[@]}"; do
+        if `echo ${gccincdirarr[$i]} | grep "/c++/" > /dev/null  2>&1` ; then
+            echo "#define R__GCC_INC_DIR_$k \"${gccincdirarr[$i]}\"" >> RConfigure-out.tmp
+            k=`expr $k + 1`
+            if (($k > 10)); then
+                result "`basename $0`: more than 10 alternative gcc C++ library include paths."
+                result "Code needs to be modified, call ROOT support."
+                exit 1
+            fi
+        fi
+    done
+    echo "#endif" >> RConfigure-out.tmp
+fi
 
 # only update $CONFIGUREOUT when different
 if test -f $CONFIGUREOUT; then

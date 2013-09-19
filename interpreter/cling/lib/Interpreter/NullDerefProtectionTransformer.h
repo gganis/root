@@ -1,55 +1,35 @@
 //--------------------------------------------------------------------*- C++ -*-
 // CLING - the C++ LLVM-based InterpreterG :)
-// version: $Id$
-// author:  Vassil Vassilev <vvasilev@cern.ch>
+// version: $Id: cb7241880ebcbba87b2ae16476c2812afd7ff571 $
 // author:  Baozeng Ding <sploving1@gmail.com>
+// author:  Vassil Vassilev <vasil.georgiev.vasilev@cern.ch>
 //------------------------------------------------------------------------------
 
-#ifndef CLING_NULL_DEREFERENCE_PROTECTION_TRANSFORMER
-#define CLING_NULL_DEREFERENCE_PROTECTION_TRANSFORMER
+#ifndef CLING_AST_NULL_DEREF_PROTECTION_H
+#define CLING_AST_NULL_DEREF_PROTECTION_H
 
 #include "TransactionTransformer.h"
 
-#include "llvm/IR/IRBuilder.h"
-#include "llvm/ADT/OwningPtr.h"
-
 namespace clang {
-  class MangleContext;
-}
-
-namespace llvm {
-  class BasicBlock;
-  class Function;
-  class LoadInst;
   class Sema;
-  class StoreInst;
 }
 
 namespace cling {
 
-  struct NullDerefProtectionTransformer : public TransactionTransformer {
-  
-   private:
-    llvm::BasicBlock* FailBB;
-    llvm::IRBuilder<>* Builder;
-    llvm::Instruction* Inst;
-    llvm::OwningPtr<clang::MangleContext> m_MangleCtx;
+  class NullDerefProtectionTransformer : public TransactionTransformer {
 
-    llvm::BasicBlock* getTrapBB(llvm::BasicBlock* BB);
-    void instrumentInst(llvm::Instruction* Inst, llvm::Value* Arg);
-    bool runOnFunction(llvm::Function& F);
-    void instrumentCallInst(llvm::Instruction* TheCall,
-                            const std::bitset<32>& ArgIndexs);
-    void handleNonNullArgCall(llvm::Module& M,
-                              const std::string& FName,
-                              const std::bitset<32>& ArgIndexs);
+   
+    public:
+      ///\ brief Constructs the NullDeref AST Transformer.
+      ///
+      ///\param[in] S - The semantic analysis object.
+      ///
+      NullDerefProtectionTransformer(clang::Sema* S);
 
-  public:
-    NullDerefProtectionTransformer(clang::Sema* S);
-    virtual ~NullDerefProtectionTransformer();
-
-    virtual void Transform();
+      virtual ~NullDerefProtectionTransformer();
+      virtual void Transform();
   };
-} // end namespace cling
 
-#endif // CLING_NULL_DEREFERENCE_PROTECTION_TRANSFORMER
+} // namespace cling
+
+#endif // CLING_AST_NULL_DEREF_PROTECTION_H
