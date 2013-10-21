@@ -44,7 +44,7 @@ class TClingBaseClassInfo {
 private:
 
    cling::Interpreter           *fInterp; // Cling interpreter, we do *not* own.
-   TClingClassInfo              *fClassInfo; // Class we were intialized with, we own.
+   const TClingClassInfo        *fClassInfo; // Class we were intialized with, we own.
    bool                          fFirstTime; // Flag to provide Cint semantics for iterator advancement (not first time)
    bool                          fDescend; // Flag for signaling the need to descend on this advancement.
    const clang::Decl            *fDecl; // Current class whose bases we are iterating through, we do *not* own.
@@ -52,12 +52,17 @@ private:
    TClingClassInfo              *fBaseInfo; // Base class our iterator is currently pointing at, we own.
    std::vector<std::pair<std::pair<const clang::Decl*, clang::CXXRecordDecl::base_class_const_iterator>, long> > fIterStack; // Iterator stack.
    long                          fOffset; // Offset of the current base, fDecl, in the most-derived class.
+   bool                          fClassInfoOwnership; // We created the fClassInfo and we need to delete it in the constructor. 
 
 public:
 
-   ~TClingBaseClassInfo() { delete fClassInfo; delete fBaseInfo; }
+   ~TClingBaseClassInfo() {
+      if (fClassInfoOwnership) delete fClassInfo;
+      delete fBaseInfo;
+   }
 
-   TClingBaseClassInfo(cling::Interpreter*, TClingClassInfo*);
+   TClingBaseClassInfo(cling::Interpreter*, const TClingClassInfo*);
+   TClingBaseClassInfo(cling::Interpreter*, const TClingClassInfo* derived, TClingClassInfo* base);
    TClingBaseClassInfo(const TClingBaseClassInfo&);
    TClingBaseClassInfo& operator=(const TClingBaseClassInfo&);
 
@@ -66,13 +71,15 @@ public:
    bool          IsValid() const;
    int           Next();
    int           Next(int onlyDirect);
-   long          Offset() const;
+   long          Offset(void * address = 0) const;
    long          Property() const;
    long          Tagnum() const;
    const char   *FullName(const ROOT::TMetaUtils::TNormalizedCtxt &normCtxt) const;
    const char   *Name() const;
    const char   *TmpltName() const;
 
+private:
+   OffsetPtrFunc_t GenerateBaseOffsetFunction(const TClingClassInfo* derivedClass, TClingClassInfo* targetClass, void* address) const;  
 };
 
 #endif // ROOT_TClingBaseClassInfo

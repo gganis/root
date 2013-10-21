@@ -40,7 +40,7 @@ class TMethod;
 class TObjArray;
 class TVirtualMutex;
 
-R__EXTERN TVirtualMutex *gClingMutex;
+R__EXTERN TVirtualMutex *gInterpreterMutex;
 
 class TInterpreter : public TNamed {
 
@@ -54,6 +54,35 @@ public:
       kDangerous   = 2,
       kFatal       = 3,
       kProcessing  = 99
+   };
+
+   struct CallFuncIFacePtr_t {
+      enum EKind {
+         kUninitialized,
+         kGeneric,
+         kCtor,
+         kDtor
+      };
+
+      typedef void (*Generic_t)(void*, int, void**, void*);
+      typedef void (*Ctor_t)(void**, void*, unsigned long);
+      typedef void (*Dtor_t)(void*, unsigned long, int);
+
+      CallFuncIFacePtr_t():
+         fKind(kUninitialized), fGeneric(0) {}
+      CallFuncIFacePtr_t(Generic_t func):
+         fKind(kGeneric), fGeneric(func) {}
+      CallFuncIFacePtr_t(Ctor_t func):
+         fKind(kCtor), fCtor(func) {}
+      CallFuncIFacePtr_t(Dtor_t func):
+         fKind(kDtor), fDtor(func) {}
+
+      EKind fKind;
+      union {
+         Generic_t fGeneric;
+         Ctor_t fCtor;
+         Dtor_t fDtor;
+      };
    };
 
    TInterpreter() { }   // for Dictionary
@@ -186,6 +215,7 @@ public:
    virtual void   CallFunc_IgnoreExtraArgs(CallFunc_t * /*func */, bool /*ignore*/) const {;}
    virtual void   CallFunc_Init(CallFunc_t * /* func */) const {;}
    virtual Bool_t CallFunc_IsValid(CallFunc_t * /* func */) const {return 0;}
+   virtual CallFuncIFacePtr_t CallFunc_IFacePtr(CallFunc_t * /* func */) const {return CallFuncIFacePtr_t();}
    virtual void   CallFunc_ResetArg(CallFunc_t * /* func */) const {;}
    virtual void   CallFunc_SetArg(CallFunc_t * /*func */, Long_t /* param */) const {;}
    virtual void   CallFunc_SetArg(CallFunc_t * /* func */, Double_t /* param */) const {;}
@@ -211,6 +241,8 @@ public:
    virtual ClassInfo_t  *ClassInfo_Factory() const = 0; 
    virtual ClassInfo_t  *ClassInfo_Factory(ClassInfo_t * /* cl */) const = 0;
    virtual ClassInfo_t  *ClassInfo_Factory(const char * /* name */) const = 0; 
+   virtual Long_t   ClassInfo_GetBaseOffset(ClassInfo_t* /* derived */,
+                                            ClassInfo_t* /* target */, void* /* address */ = 0) const {return 0;}
    virtual int    ClassInfo_GetMethodNArg(ClassInfo_t * /* info */, const char * /* method */,const char * /* proto */, Bool_t /* objectIsConst */ = false, ROOT::EFunctionMatchMode /* mode */ = ROOT::kConversionMatch) const {return 0;}
    virtual Bool_t ClassInfo_HasDefaultConstructor(ClassInfo_t * /* info */) const {return 0;}
    virtual Bool_t ClassInfo_HasMethod(ClassInfo_t * /* info */, const char * /* name */) const {return 0;}
@@ -240,9 +272,11 @@ public:
    // BaseClassInfo interface
    virtual void   BaseClassInfo_Delete(BaseClassInfo_t * /* bcinfo */) const {;}
    virtual BaseClassInfo_t  *BaseClassInfo_Factory(ClassInfo_t * /* info */) const {return 0;}
+   virtual BaseClassInfo_t  *BaseClassInfo_Factory(ClassInfo_t* /* derived */,
+                                                   ClassInfo_t* /* base */) const {return 0;}
    virtual int    BaseClassInfo_Next(BaseClassInfo_t * /* bcinfo */) const {return 0;}
    virtual int    BaseClassInfo_Next(BaseClassInfo_t * /* bcinfo */, int  /* onlyDirect */) const {return 0;}
-   virtual Long_t BaseClassInfo_Offset(BaseClassInfo_t * /* bcinfo */) const {return 0;}
+   virtual Long_t BaseClassInfo_Offset(BaseClassInfo_t * /* bcinfo */, void* /* address */ = 0 /*default for non-virtual*/) const {return 0;}
    virtual Long_t BaseClassInfo_Property(BaseClassInfo_t * /* bcinfo */) const {return 0;}
    virtual Long_t BaseClassInfo_Tagnum(BaseClassInfo_t * /* bcinfo */) const {return 0;}
    virtual const char *BaseClassInfo_FullName(BaseClassInfo_t * /* bcinfo */) const {return 0;}

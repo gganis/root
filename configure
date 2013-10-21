@@ -56,7 +56,7 @@ options="                    \
    enable_builtin_lzma       \
    enable_builtin_llvm       \
    enable_cxx11              \
-   enable_libcxx11           \
+   enable_libcxx             \
    enable_castor             \
    enable_chirp              \
    enable_cocoa              \
@@ -104,6 +104,7 @@ options="                    \
    enable_table              \
    enable_tmva               \
    enable_unuran             \
+   enable_vc                 \
    enable_winrtdebug         \
    enable_x11                \
    enable_xft                \
@@ -143,7 +144,7 @@ done
 for c in $options ; do eval ${c}_explicit="" ; done
 
 enable_cxx11=no
-enable_libcxx11=no
+enable_libcxx=no
 enable_cocoa=
 enable_afs=no
 enable_alloc=no
@@ -163,6 +164,7 @@ enable_soversion=no
 enable_table=no
 enable_thread=yes        # cannot be disabled (not in above options list)
 enable_unuran=no
+enable_vc=no
 enable_winrtdebug=
 enable_builtin_freetype=no
 enable_builtin_ftgl=no
@@ -183,6 +185,7 @@ if test "x$ENABLEALL" = "xyes"; then
     #enable_ruby=yes     #not supported in ROOT v6.0.0 yet
     enable_table=yes
     enable_unuran=yes
+    enable_vc=yes
 fi
 
 # Remove old log file
@@ -235,6 +238,7 @@ MINUIT2          \
 TABLE            \
 XMLDIR           \
 CASROOT          \
+VC               \
 "
 configenvvars=
 for c in $envvars ; do
@@ -363,7 +367,7 @@ check_libpic() {
 
 #_____________________________________________________________________
 check_libcompat() {
-    # This function will try to find out if a library [$1] contains 
+    # This function will try to find out if a library [$1] contains
     # compatible 64 bit or 32 bit code matching the selected architecture.
     # Currently only MacOS X supports universal libs.
     # The result of the check is stored in is_libcompat, 1 if true,
@@ -406,6 +410,69 @@ check_libcompat() {
     else
         is_libnotcompat=1
         logmsg " is a not-compatible library"
+    fi
+}
+
+#_____________________________________________________________________
+check_libcxxcompat() {
+    # This function will try to find out if a library [$1] is linked
+    # against a compatible C++ run-time library (either libstdc++ or libc++).
+    # Currently only MacOS X and Linux support libc++ and libstdc++.
+    # The result of the check is stored in is_libcxxcompat, 1 if true,
+    # 0 otherwise, which should be immediately copied, since the variable
+    # will be overwritten at next invocation of this function.
+
+    is_libcxxcompat=1
+    ret=0
+
+    # Assert that we got enough arguments
+    if test $# -ne 1 ; then
+        echo "check_libcxxcompat: not 1 argument"
+        return 1
+    fi
+
+    # Save arguments in logical names
+    chklibcxxcompat=$1
+    logmsg "Checking if $chklibcxxcompat is linked against compatible C++ run-time"
+
+    if test "x$enable_libcxx" = "xyes"; then
+        case $arch in
+        macosx*)
+            logmsg " otool -L $chklibcxxcompat | grep libstdc++"
+            if otool -L $chklibcxxcompat | grep 'libstdc++' > /dev/null 2>& 1 ; then
+                ret=1
+            fi
+            ;;
+        linux*)
+            logmsg " ldd $chklibcxxcompat | grep libstdc++"
+            if ldd $chklibcxxcompat | grep 'libstdc++' > /dev/null 2>& 1 ; then
+                ret=1
+            fi
+            ;;
+        esac
+    else
+        case $arch in
+        macosx*)
+            logmsg " otool -L $chklibcxxcompat | grep libc++"
+            if otool -L $chklibcxxcompat | grep 'libc++' > /dev/null 2>& 1 ; then
+                ret=1
+            fi
+            ;;
+        linux*)
+            logmsg " ldd $chklibcxxcompat | grep libc++"
+            if ldd $chklibcxxcompat | grep 'libc++' > /dev/null 2>& 1 ; then
+                ret=1
+            fi
+            ;;
+        esac
+    fi
+
+    logmsg " result: $ret"
+    if test $ret -eq 1 ; then
+        is_libcxxcompat=0
+        logmsg " is linked against not-compatible C++ run-time library"
+    else
+        logmsg " is linked against compatible C++ run-time library"
     fi
 }
 
@@ -604,6 +671,12 @@ check_library() {
                                     break 4
                                 fi
                             fi
+                            if test "x$checklibcxxcompat" = "xyes" ; then
+                                check_libcxxcompat $n
+                                if test $is_libcxxcompat -eq 0 ; then
+                                    break 4
+                                fi
+                            fi
                             found_dir=$l
                             found_lib=$j
                             if test "x$arch" = "xlinux"; then
@@ -661,14 +734,14 @@ check_library() {
 
         if (test "x$found_lib" = "x$flib" && test "x$shared" = "xno") || \
            test "x$maclib" = "xyes" ; then
-                found_raw_lib=${found_lib}
+            found_raw_lib=${found_lib}
             found_lib=${found_dir}/${found_lib}
             found_raw_dir=${found_dir}
             found_dir=""
         else
             found_raw_lib=${found_lib}
             if test ! "x$shared" = "xstaticonly" ; then
-              found_lib=`echo $found_lib | sed 's|^lib\(.*\)\..*|-l\1|'`
+                found_lib=`echo $found_lib | sed 's|^lib\(.*\)\..*|-l\1|'`
             fi
             found_raw_dir=${found_dir}
             if test ! "x$shared" = "xstaticonly" ; then
@@ -1211,6 +1284,33 @@ check_explicit()
     fi
 }
 
+invoke_preprocessor() {
+    # This function will try to preprocess a given file. The result is stored in
+    # preprocessor_output, which should be immediately copied, since the
+    # variable will be overwritten at next invocation of this function.
+
+    cat > conftest.h
+    preprocessor_output=
+
+    logmsg " preprocessing"
+    cat <<EOF > conftest.mk
+include ${ac_srcdir}/config/Makefile.${arch}
+CXX = ${altcxx}
+conftest.out: conftest.h
+	\$(CXX) -E \$< -o \$@
+EOF
+
+    $gnumake -f conftest.mk >> $logfile 2>&1
+    if test $? -eq 0 ; then
+        preprocessor_output="`grep '^[^#]' conftest.out`"
+        logmsg " Preprocessing OK"
+    else
+        logmsg " Failed code was"
+        cat conftest.mk $1 >> $logfile
+    fi
+    rm -rf conftest.mk conftest.out conftest.h
+}
+
 #_____________________________________________________________________
 guess_architecture() {
     # Try to guess the architecture of the host system
@@ -1488,7 +1588,7 @@ To reduce the output of configure by removing the trailing howto message, use:
 
 Use the flag:
 
-  --fail-on-missing 
+  --fail-on-missing
 
 to force configure to fail if a component that has been explicitly enabled
 is missing some dependencies and can not be built.
@@ -1510,7 +1610,7 @@ enable/disable options, prefix with either --enable- or --disable-
   builtin-lzma       Build included liblzma, or use system liblzma
   builtin-llvm       Build included libclang, or use system libclang
   cxx11              Build using C++11 compatible mode, requires gcc > 4.7.x or clang
-  libcxx11           Build using libc++, requires cxx11 option (MacOS X only, for the time being)
+  libcxx             Build using libc++, required by clang cxx11 option (MacOS X only, for the time being)
   castor             CASTOR support, requires libshift from CASTOR >= 1.5.2
   chirp              Chirp filesystem support, requires cctools >= 3.2.2
   cocoa              Use native Cocoa/Quartz graphics backend (MacOS X only)
@@ -1540,7 +1640,7 @@ enable/disable options, prefix with either --enable- or --disable-
   oracle             Oracle support, requires libocci
   pgsql              PostgreSQL support, requires libpq
   pythia6            Pythia6 EG support, requires libPythia6
-  pythia8            Pythia8 EG support, requires libPythia8
+  pythia8            Pythia8 EG support, requires libPythia8 >= 8180
   python             Python ROOT bindings, requires python >= 2.5
   qt                 Qt graphics backend, requires libqt >= 4.x
   qtgsi              GSI's Qt integration, requires libqt >= 3
@@ -1558,6 +1658,7 @@ enable/disable options, prefix with either --enable- or --disable-
   table              Build libTable contrib library
   tmva               Build TMVA multi variate analysis library
   unuran             UNURAN - package for generating non-uniform random numbers
+  vc                 Vc adds a few new types for portable and intuitive SIMD programming
   winrtdebug         Link against the Windows debug runtime library
   x11                X11 support
   xml                XML parser interface
@@ -1788,6 +1889,8 @@ solaris64CC5)
 macosx*)
    logmsg "Will check for compatible libraries"
    checklibcompat="yes"
+   logmsg "Will check for compatible C++ run-time libraries"
+   checklibcxxcompat="yes"
    if test "x$macosxvers" = "x"; then
       # get most recent SDK version
       macosxminor=`sw_vers | sed -n 's/ProductVersion://p' | cut -d . -f 2`
@@ -1857,6 +1960,9 @@ if test "x$platform" = "xmacosx" ; then
    if [ `sw_vers | sed -n 's/ProductVersion://p' | cut -d . -f 2` -ge 8 ]; then
       macosx108=yes
    fi
+   if [ `sw_vers | sed -n 's/ProductVersion://p' | cut -d . -f 2` -ge 9 ]; then
+      macosx109=yes
+   fi
 fi
 
 if test "x$platform" = "xlinux" ; then
@@ -1870,7 +1976,7 @@ if test "x$platform" = "xlinux" ; then
        fi
        if lsb_release -d | grep -i 'mint' > /dev/null 2>& 1; then
           linuxdist="multiarch"
-       fi 
+       fi
     fi
 
     debmultiarch=
@@ -2386,9 +2492,10 @@ if test "x$enable_cxx11" = "xyes"; then
         result "no"
     else
         usecxx11="define"
-        # on OS X libcxx11 is required for C++11 support so turn the option on
-        if test "x$platform" = "xmacosx"; then
-            enable_libcxx11="yes"
+        # on OS X libcxx is required for C++11 support with clang
+        # so turn the option on when using clang
+        if test "x$platform" = "xmacosx" && echo $altcxx | grep 'clang++' > /dev/null 2>&1; then
+            enable_libcxx="yes"
         fi
         result "yes"
     fi
@@ -2396,18 +2503,24 @@ fi
 
 ######################################################################
 #
-### echo %%% libc++ - compile and link using libc++ (need OSX and cxx11 option)
+### echo %%% libc++ - compile and link using libc++
 #
 # needs gcc > 4.7.x or clang
-uselibcxx11="undef"
-if test "x$enable_cxx11" = "xyes" && test "x$enable_libcxx11" = "xyes" ; then
+
+# OSX 10.9 only has libc++ with clang so make sure this option is turned on
+if test "x$macosx109" = "xyes" && echo $altcxx | grep 'clang++' > /dev/null 2>&1; then
+    enable_libcxx="yes"
+fi
+
+uselibcxx="undef"
+if test "x$enable_libcxx" = "xyes" ; then
     message "Checking whether libc++ is supported"
-    check_cxxopt -std=c++11 -stdlib=libc++
+    check_cxxopt -stdlib=libc++
     if test $cxxopt_result -eq 0 ; then
-        enable_libcxx11="no"
+        enable_libcxx="no"
         result "no"
     else
-        uselibcxx11="define"
+        uselibcxx="define"
         result "yes"
     fi
 fi
@@ -2443,14 +2556,13 @@ rm -f conftest.mk conftest conftest.cxx
 
 ######################################################################
 #
-### echo %%% Cling - LLVM/clang based interpreter prototype
+### echo %%% Check for builtin or external LLVM/Clang
 #
 hasllvm="undef"
 llvmdir="/**/"
 if test "x$enable_builtin_llvm" = "x" || \
    test "x$enable_builtin_llvm" = "xno" ; then
     message "Checking for llvm-config for external llvm"
-	
     # allow LLVMDIR instead of --with-llvm-config
     if test "x$llvmconfig" = "x" ; then
         if test ! "x$LLVMDIR" = "x" ; then
@@ -2506,8 +2618,8 @@ if test "x$enable_cocoa" = "xyes"; then
         result "or make sure the desired SDK version is installed"
         exit 1
     else
-	openglincdir=${osxsdk}/System/Library/Frameworks/OpenGL.framework/Headers
-	opengllibdir=${osxsdk}/System/Library/Frameworks/OpenGL.framework/Libraries
+        openglincdir=${osxsdk}/System/Library/Frameworks/OpenGL.framework/Headers
+        opengllibdir=${osxsdk}/System/Library/Frameworks/OpenGL.framework/Libraries
     fi
 fi
 
@@ -2934,8 +3046,8 @@ if test ! "x$enable_opengl" = "xno" && test ! "x$platform" = "xwin32" ; then
     opengllibdir=$found_dir
 
     if test ! "x$macosx105" = "x" && test "x$macosx106" = "x" ; then
-	# Mac OS X 10.5 problem
-	opengllib="-dylib_file /usr/X11R6/lib/libGL.dylib:/usr/X11R6/lib/libGL.dylib -lGL"
+        # Mac OS X 10.5 problem
+        opengllib="-dylib_file /usr/X11R6/lib/libGL.dylib:/usr/X11R6/lib/libGL.dylib -lGL"
     fi
 
     check_library "libGLU libMesaGLU" "$enable_shared" \
@@ -3177,10 +3289,13 @@ if test ! "x$enable_oracle" = "xno"; then
     check_library "libocci oraocci10" "$enable_shared" "$keeplibdir" \
        $ORACLE ${ORACLE:+$ORACLE/lib} $ORACLELIBDIR \
        /usr/local/lib /usr/lib /usr/lib/oracle/*/client/lib
-    oraclelib="$oraclelib $found_lib"
+    if test "x$found_lib" = "x"; then
+       oraclelib=""
+    elif test ! "x$oraclelib" = "x"; then
+        oraclelib="$oraclelib $found_lib"
+    fi
 
-    # space in "x " is intentional
-    if test "x$oracleincdir" = "x" || test "x$oraclelib" = "x "; then
+    if test "x$oracleincdir" = "x" || test "x$oraclelib" = "x"; then
         enable_oracle="no"
     fi
 fi
@@ -3247,8 +3362,8 @@ if test ! "x$enable_sqlite" = "xno"; then
         /usr/include /usr/local/include \
         /usr/include/sqlite /usr/local/include/sqlite /usr/local/sqlite/include \
         /usr/include/sqlite3 /usr/local/include/sqlite3 /usr/local/sqlite3/include \
-	/usr/sqlite /opt/sqlite /opt/sqlite3/include \
-	/usr/sqlite3 /opt/sqlite3 /opt/sqlite/include
+        /usr/sqlite /opt/sqlite /opt/sqlite3/include \
+        /usr/sqlite3 /opt/sqlite3 /opt/sqlite/include
     sqliteinc=$found_hdr
     sqliteincdir=$found_dir
 
@@ -3981,11 +4096,11 @@ check_explicit "$enable_pythia6" "$enable_pythia6_explicit" \
 #
 # (See http://root.cern.ch and Lund)
 #
-# Check for libpythia8
+# Check for libpythia8 >= 8180
 #
 if test ! "x$enable_pythia8" = "xno" ; then
     # Check for PYTHIA8 include and library
-    check_header "Pythia.h" "$pythia8incdir" \
+    check_header "Pythia8/Pythia.h" "$pythia8incdir" \
         $PYTHIA8 ${PYTHIA8:+$PYTHIA8/include} \
         /opt/pythia8/include /usr/local/include /usr/include /usr/include/pythia
     pythia8incdir=$found_dir
@@ -4330,7 +4445,7 @@ if test ! "x$enable_asimage" = "xno" ; then
     # If we didn't find the system libAfterImage, or the user didn't ask
     # for a system library, then see if we have various headers needed.
     # For Cocoa backend force libAfterImage builtin jpeg and png libs
-    # to avoid system versions based on X11. 
+    # to avoid system versions based on X11.
     if test "x$enable_builtin_afterimage" = "xyes" && test ! "x$enable_cocoa" = "xyes"; then
        check_header "jpeglib.h" "" \
           ${LIBJPEG:+$LIBJPEG/include} \
@@ -4717,7 +4832,7 @@ if test "x$enable_xrootd" = "xyes" ; then
    xrdcomm=""
    vercomm=""
    extraxrdflags=""
-   
+
    # Localize the version header; priority to specific inc and lib settings,
    # followed by global dir setting and standard paths
    xrdincone=""
@@ -4748,13 +4863,13 @@ if test "x$enable_xrootd" = "xyes" ; then
    if test ! "x$found_hdr" = "x" ; then
       xrdinc="$found_dir/$found_hdr"
       # Find out which path was the good one
-      if test "x$xrdinc" = "x$xrdincone" ; then 
+      if test "x$xrdinc" = "x$xrdincone" ; then
          xrdincdir="$found_dir"
          xrdlibdir="$xrdlibone"
-      elif test "x$xrdinc" = "x$xrdinctwoa" ; then 
+      elif test "x$xrdinc" = "x$xrdinctwoa" ; then
          xrdincdir="$xrdlibtwo/include/xrootd"
          xrdlibdir="$xrdlibtwo/lib"
-      elif test "x$xrdinc" = "x$xrdinctwob" ; then 
+      elif test "x$xrdinc" = "x$xrdinctwob" ; then
          xrdincdir="$xrdlibtwo/src"
          xrdlibdir="$xrdlibtwo/lib"
       else
@@ -4762,10 +4877,10 @@ if test "x$enable_xrootd" = "xyes" ; then
             rdir=`dirname $ll`
             xinca="$rdir/include/xrootd/XrdVersion.hh"
             xincb="$rdir/include/XrdVersion.hh"
-            if test "x$xrdinc" = "x$xinca" ; then 
+            if test "x$xrdinc" = "x$xinca" ; then
                xrdincdir="$rdir/include/xrootd"
                xrdlibdir="$ll"
-            elif test "x$xrdinc" = "x$xincb" ; then 
+            elif test "x$xrdinc" = "x$xincb" ; then
                xrdincdir="$rdir/include"
                xrdlibdir="$ll"
             fi
@@ -4829,7 +4944,7 @@ if test "x$enable_xrootd" = "xyes" ; then
          fi
          if test "x$oldver" = "xyes" ; then
             decver=`echo $tmpver | sed 's|[^0-9]||g' | cut -c1-8`
-	 fi
+         fi
       fi
    fi
    # Protect against 3.3.0, first version with 'include/xrootd/private'
@@ -4851,7 +4966,7 @@ if test "x$enable_xrootd" = "xyes" ; then
    # Check libraries now
    hasxrdutils="no"
    libxrdoucbjr=""
-   # 
+   #
    # Release date of version 3.1.0 containing the new lib packaging
    decreftre=300000000
    decrefutils=300010000
@@ -4860,16 +4975,16 @@ if test "x$enable_xrootd" = "xyes" ; then
    fi
    decrefnetut=20100729
    if [ $decver -ge $decrefutils ] ; then
-      xrdlibs="libXrdMain libXrdUtils libXrdClient" 
+      xrdlibs="libXrdMain libXrdUtils libXrdClient"
       hasxrdutils="yes"
    elif [ $decver -ge $decrefnetut ] ; then
-      xrdlibs="libXrdNet libXrdNetUtil libXrdOuc libXrdSys libXrdClient libXrd" 
+      xrdlibs="libXrdNet libXrdNetUtil libXrdOuc libXrdSys libXrdClient libXrd"
    else
-      xrdlibs="libXrdNet libXrdOuc libXrdSys libXrdClient libXrd" 
+      xrdlibs="libXrdNet libXrdOuc libXrdSys libXrdClient libXrd"
    fi
    tmpxrdlibdir=""
    xrdlibext=""
-   for ll in $xrdlibs ; do 
+   for ll in $xrdlibs ; do
       #
       # Check if packaging has libXrdUtils or the old libXrdOuc, libXrdSys, ...
       check_library $ll "$enable_shared" "$xrdlibdir" "$xrdlibdir"
@@ -5953,6 +6068,160 @@ result $enable_shadowpw
 check_explicit "$enable_shadowpw" "$enable_shadowpw_explicit" \
      "Explicitly required Shadow passwords dependencies not fulfilled"
 
+##########################################################################
+#
+### echo %%% check for Vc Library compile flags
+#
+avxcxxflag=""
+ssecxxflags=""
+abiversioncxxflag=""
+vcflags=""
+if test "x$enable_vc" = "xyes"; then
+    message "Checking required compiler/assembler workarounds"
+    # with GCC and Open64 check the binutils version. If it's less than 2.18.93 the assembler doesn't know xgetbv
+    case $arch in
+	macos*)
+	    ;;
+	*)
+	    as=`${altcxx} -print-prog-name=as`
+            as_version=`${as} --version|head -n1|sed -e 's/^.*)//' -e 's/^.* \([0-9]\+\.[0-9]\+\.[0-9]\+\).*$/\1/'|awk -F. '{print ($1*1000+$2)*1000+$3}'`
+	    if test $as_version -lt 2018093; then
+		vcflags="$vcflags -DVC_NO_XGETBV"
+	    fi
+	    ;;
+    esac
+    invoke_preprocessor <<EOF
+#define _MAKE_VERSION(A, B, C) A##.##B##.##C
+#define MAKE_VERSION(A, B, C) _MAKE_VERSION(A, B, C)
+#ifdef __INTEL_COMPILER
+ICC
+__INTEL_COMPILER_BUILD_DATE
+#elif defined(__OPENCC__)
+Open64
+#elif defined(__clang__)
+clang
+MAKE_VERSION(__clang_major__, __clang_minor__, __clang_patchlevel__)
+#elif defined(__GNUC__)
+GCC
+MAKE_VERSION(__GNUC__, __GNUC_MINOR__, __GNUC_PATCHLEVEL__)
+#elif defined(_MSC_VER)
+MSVC
+_MSC_FULL_VER
+#else
+UNSUPPORTED_COMPILER
+#endif
+EOF
+    compiler=`echo "$preprocessor_output"|sed '1!d'`
+    compiler_version=`echo "$preprocessor_output"|sed '2!d'|awk -F. '{ print ($1*100+$2)*100+$3 }'`
+    avx_broken=false
+    sse_broken=false
+    xop_broken=false
+    fma4_broken=false
+    case $compiler in
+        ICC)
+            vcflags="$vcflags -diag-disable 913"
+            ;;
+        Open64)
+            avx_broken=true
+            ;;
+        clang)
+            if test $compiler_version -lt 30100; then
+                echo
+                echo "Clang before version 3.1 is unable to compile Vc correctly. Please update clang or disable Vc."
+                exit 1
+            fi
+            ;;
+        GCC)
+            vcflags="$vcflags -Wno-unused-function"
+            if test $compiler_version -lt 40500; then
+                vcflags="$vcflags -Wno-parentheses  -Wno-strict-aliasing -Wno-uninitialized"
+                if test $compiler_version -lt 40406; then
+                    avx_broken=true
+                    if test $compiler_version -lt 40300; then
+                        sse_broken=true
+                        if test $compiler_version -lt 40200; then
+                            vcflags="$vcflags -fno-strict-aliasing"
+                        fi
+                    fi
+                fi
+            elif test $compiler_version -eq 40600; then
+                avx_broken=true
+            elif test $compiler_version -eq 40700; then
+                vcflags="$vcflags -fno-predictive-commoning"
+            fi
+            if test "x$platform" = "xmacosx" ; then
+                avx_broken=true
+                vcflags="$vcflags -DVC_NO_XGETBV"
+            fi
+            ;;
+        MSVC)
+            vcflags="$vcflags -DNOMINMAX"
+            xop_broken=true
+            fma4_broken=true
+            ;;
+        UNSUPPORTED_COMPILER)
+            ;;
+    esac
+
+    test -n "$vcflags" && result "$vcflags" || result ''
+
+    # check for SIMD compiler flags
+    message "Checking SIMD specific compiler flags"
+    $avx_broken || for flag in '-xAVX' '-mavx' '/arch:AVX'; do
+        check_cxxopt $flag
+        if test $cxxopt_result -eq 1; then
+            avxcxxflag=$flag
+            break;
+        fi
+    done
+    $sse_broken || for tuples in '-xSSE4.1;-msse4.1' '-xSSSE3;-mssse3' '-xSSE3;-msse3' '-xSSE2;-msse2;/arch:SSE2'; do
+        save_IFS="$IFS"
+        IFS=';'
+        for flag in $tuples; do
+            IFS="$save_IFS"
+            check_cxxopt $flag
+            if test $cxxopt_result -eq 1; then
+                ssecxxflags="$ssecxxflags $flag"
+                break;
+            fi
+        done
+    done
+    if test -n "$avxcxxflag" && ! $xop_broken && ! $fma4_broken; then
+        for flag in '-mxop -mfma4'; do
+            check_cxxopt $flag
+            if test $cxxopt_result -eq 1; then
+                flag=`echo $flag|tr ' ' '~'`
+                ssecxxflags="$ssecxxflags -DVC_IMPL=SSE+XOP+FMA4~$flag $avxcxxflag~$flag"
+                break;
+            fi
+        done
+    fi
+    ssecxxflags="${ssecxxflags# }"
+    result "$avxcxxflag $ssecxxflags"
+
+    # check for ABI version compiler flags
+    case $compiler in
+	GCC)
+	    message "Checking ABI version compiler flags"
+	    abiversioncxxflag=""
+	    for flag in '-fabi-version=0' '-fabi-version=4'; do
+		check_cxxopt $flag
+		if test $cxxopt_result -eq 1; then
+		    abiversioncxxflag="$flag"
+		    break;
+		fi
+	    done
+	    test -n "$abiversioncxxflag" && result "$abiversioncxxflag" || result 'N/A'
+    esac
+fi
+
+sed -e "s|@avxcxxflag@|$avxcxxflag|"               \
+    -e "s|@ssecxxflags@|$ssecxxflags|"             \
+    -e "s|@abiversioncxxflag@|$abiversioncxxflag|" \
+    -e "s|@vcflags@|$vcflags|"                     \
+    < Makefile.tmp > Makefile.tmpp
+mv Makefile.tmpp Makefile.tmp
+
 ######################################################################
 #
 ### echo %%% MathMore Library - Contributed library
@@ -6179,6 +6448,21 @@ fi
 
 ######################################################################
 #
+### echo %%% Vc Library - Contributed library
+#
+message "Checking whether to build libVc"
+if test "x$enable_vc" = "xyes" || test ! "x$VC" = "x"; then
+    enable_vc="yes"
+    result "yes"
+    hasvc="define"
+else
+    enable_vc=""
+    result "no"
+    hasvc="undef"
+fi
+
+######################################################################
+#
 ### echo %%% GDML Library - Contributed library
 #
 message "Checking whether to build libGdml"
@@ -6288,6 +6572,7 @@ if test "x$show_pkglist" = "xyes" ; then
     test "x$enable_xml"      = "xyes" && pl="$pl libroot-io-xmlparser"
     test "x$enable_mathmore" = "xyes" && pl="$pl libroot-math-mathmore"
     test "x$enable_unuran"   = "xyes" && pl="$pl libroot-math-unuran"
+    test "x$enable_vc"       = "xyes" && pl="$pl libroot-math-vc"
     test "x$enable_table"    = "xyes" && pl="$pl libroot-misc-table"
     test "x$enable_ldap"     = "xyes" && pl="$pl libroot-net-ldap"
     test "x$enable_roofit"   = "xyes" && pl="$pl libroot-roofit"
@@ -6801,6 +7086,7 @@ sed -e "s|@aclocaldir@|$aclocaldir|"            \
     -e "s|@buildroofit@|$enable_roofit|"        \
     -e "s|@buildminuit2@|$enable_minuit2|"      \
     -e "s|@buildunuran@|$enable_unuran|"        \
+    -e "s|@buildvc@|$enable_vc|"                \
     -e "s|@buildgdml@|$enable_gdml|"            \
     -e "s|@buildgeocad@|$enable_geocad|"        \
     -e "s|@buildmonalisa@|$enable_monalisa|"    \
@@ -6996,7 +7282,7 @@ sed -e "s|@srcdir@|$ac_srcdir|"                 \
     -e "s|@buildglite@|$enable_glite|"          \
     -e "s|@buildcocoa@|$enable_cocoa|"          \
     -e "s|@c++11@|$enable_cxx11|"               \
-    -e "s|@libc++11@|$enable_libcxx11|"         \
+    -e "s|@libc++@|$enable_libcxx|"             \
     < Makefile.tmp > $MAKEOUT
 rm -f Makefile.tmp
 
@@ -7048,8 +7334,9 @@ sed \
     -e "s|@haspthread@|$haspthread|"       \
     -e "s|@hasxft@|$hasxft|"               \
     -e "s|@hascocoa@|$hascocoa|"           \
+    -e "s|@hasvc@|$hasvc|"                 \
     -e "s|@usec++11@|$usecxx11|"           \
-    -e "s|@uselibc++11@|$uselibcxx11|"     \
+    -e "s|@uselibc++@|$uselibcxx|"         \
     -e "s|@hasllvm@|$hasllvm|"             \
     -e "s|@llvmdir@|$llvmdir|"             \
     -e "s|@setgcctoolchain@|$setgcctoolchain|" \

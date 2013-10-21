@@ -830,8 +830,6 @@ namespace {
 //
 //
 
-ClassImp(TCling)
-
 //______________________________________________________________________________
 TCling::TCling(const char *name, const char *title)
 : TInterpreter(name, title), fGlobalsListSerial(-1), fInterpreter(0),
@@ -843,52 +841,105 @@ TCling::TCling(const char *name, const char *title)
    llvm::install_fatal_error_handler(&exceptionErrorHandler);
 
    fTemporaries = new std::vector<cling::StoredValueRef>();
-   std::string interpInclude = ROOT::TMetaUtils::GetInterpreterExtraIncludePath(false);
-   std::string pchFilename = interpInclude.substr(2) + "/allDict.cxx.pch";
-   const char* interpArgs[]
-      = {"cling4root", interpInclude.c_str(), "-include-pch", pchFilename.c_str()
+
+   std::vector<std::string> clingArgsStorage;
+   clingArgsStorage.push_back("cling4root");
+
+   // FIXME: enables relocatability for experiments' framework headers until PCMs
+   // are available.
+   const char* gccToolchain = getenv("ROOT_GCC_TOOLCHAIN");
+   const char* envInclPath = getenv("ROOT_INCLUDE_PATH");
+
+   if (gccToolchain) {
+      // We don't actually need to pass this (it will be "unused").
+      // But we do need to signal "-nostdinc++":
+      //clingArgsStorage.push_back("-gcc-toolchain");
+      //clingArgsStorage.push_back(gccToolchain);
+      clingArgsStorage.push_back("-nostdinc++");
+      if (!envInclPath) {
+         ::Error("TCling::TCling", "Must also set ROOT_INCLUDE_PATH when ROOT_GCC_TOOLCHAIN is set!");
+      }
+   }
+
+   if (envInclPath) {
+      TString strEnvInclPath(envInclPath);
+      TString tok;
+      Ssiz_t from = 0;
+      while (strEnvInclPath.Tokenize(tok, from, ":")) {
+         clingArgsStorage.push_back("-I");
+         clingArgsStorage.push_back(tok.Data());
+      }
+   }
+
+   if (!gccToolchain) {
 #ifdef R__GCC_TOOLCHAIN
-         , "-gcc-toolchain", R__GCC_TOOLCHAIN
+      clingArgsStorage.push_back("-gcc-toolchain");
+      clingArgsStorage.push_back(R__GCC_TOOLCHAIN);
 #endif
 #ifdef R__GCC_INC_DIR_0
-         , "-nostdinc++"
-         , "-I", R__GCC_INC_DIR_0
+      clingArgsStorage.push_back("-nostdinc++");
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_0);
 #endif
 #ifdef R__GCC_INC_DIR_1
-         , "-I", R__GCC_INC_DIR_1
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_1);
 #endif
 #ifdef R__GCC_INC_DIR_2
-         , "-I", R__GCC_INC_DIR_2
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_2);
 #endif
 #ifdef R__GCC_INC_DIR_3
-         , "-I", R__GCC_INC_DIR_3
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_3);
 #endif
 #ifdef R__GCC_INC_DIR_4
-         , "-I", R__GCC_INC_DIR_4
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_4);
 #endif
 #ifdef R__GCC_INC_DIR_5
-         , "-I", R__GCC_INC_DIR_5
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_5);
 #endif
 #ifdef R__GCC_INC_DIR_6
-         , "-I", R__GCC_INC_DIR_6
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_6);
 #endif
 #ifdef R__GCC_INC_DIR_7
-         , "-I", R__GCC_INC_DIR_7
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_7);
 #endif
 #ifdef R__GCC_INC_DIR_8
-         , "-I", R__GCC_INC_DIR_8
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_8);
 #endif
 #ifdef R__GCC_INC_DIR_9
-         , "-I", R__GCC_INC_DIR_9
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_9);
 #endif
 #ifdef R__GCC_INC_DIR_10
-         , "-I", R__GCC_INC_DIR_10
+      clingArgsStorage.push_back("-I");
+      clingArgsStorage.push_back(R__GCC_INC_DIR_10);
 #endif
-        };
-         //"-Xclang", "-fmodules"};
+   } // if no ROOT_GCC_TOOLCHAIN
 
-   fInterpreter = new cling::Interpreter(sizeof(interpArgs) / sizeof(char*),
-                                         interpArgs,
+   std::string interpInclude = ROOT::TMetaUtils::GetInterpreterExtraIncludePath(false);
+   clingArgsStorage.push_back(interpInclude);
+
+   std::string pchFilename = interpInclude.substr(2) + "/allDict.cxx.pch";
+   clingArgsStorage.push_back("-include-pch");
+   clingArgsStorage.push_back(pchFilename);
+
+   // clingArgsStorage.push_back("-Xclang");
+   // clingArgsStorage.push_back("-fmodules");
+
+   std::vector<const char*> interpArgs;
+   for (std::vector<std::string>::const_iterator iArg = clingArgsStorage.begin(),
+           eArg = clingArgsStorage.end(); iArg != eArg; ++iArg)
+      interpArgs.push_back(iArg->c_str());
+
+   fInterpreter = new cling::Interpreter(interpArgs.size(),
+                                         &(interpArgs[0]),
                                          ROOT::TMetaUtils::GetLLVMResourceDir(false).c_str());
    fInterpreter->installLazyFunctionCreator(autoloadCallback);
 
@@ -1184,13 +1235,13 @@ Long_t TCling::ProcessLine(const char* line, EErrorCode* error/*=0*/)
       // and is implemented by
       if (gApplication) {
          if (gApplication->IsCmdThread()) {
-            if (gGlobalMutex && !gClingMutex && fLockProcessLine) {
+            if (gGlobalMutex && !gInterpreterMutex && fLockProcessLine) {
                gGlobalMutex->Lock();
-               if (!gClingMutex)
-                  gClingMutex = gGlobalMutex->Factory(kTRUE);
+               if (!gInterpreterMutex)
+                  gInterpreterMutex = gGlobalMutex->Factory(kTRUE);
                gGlobalMutex->UnLock();
             }
-            R__LOCKGUARD(fLockProcessLine ? gClingMutex : 0);
+            R__LOCKGUARD(fLockProcessLine ? gInterpreterMutex : 0);
             gROOT->SetLineIsProcessing();
 
             UpdateAllCanvases();
@@ -1201,13 +1252,13 @@ Long_t TCling::ProcessLine(const char* line, EErrorCode* error/*=0*/)
       return 0;
    }
 
-   if (gGlobalMutex && !gClingMutex && fLockProcessLine) {
+   if (gGlobalMutex && !gInterpreterMutex && fLockProcessLine) {
       gGlobalMutex->Lock();
-      if (!gClingMutex)
-         gClingMutex = gGlobalMutex->Factory(kTRUE);
+      if (!gInterpreterMutex)
+         gInterpreterMutex = gGlobalMutex->Factory(kTRUE);
       gGlobalMutex->UnLock();
    }
-   R__LOCKGUARD(fLockProcessLine ? gClingMutex : 0);
+   R__LOCKGUARD(fLockProcessLine ? gInterpreterMutex : 0);
    gROOT->SetLineIsProcessing();
 
    // A non-zero returned value means the given line was
@@ -1329,7 +1380,7 @@ void TCling::AddIncludePath(const char *path)
    // looks for include files. Only one path item can be specified at a
    // time, i.e. "path1:path2" is not supported.
 
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    fInterpreter->AddIncludePath(path);
 }
 
@@ -1596,7 +1647,7 @@ Bool_t TCling::IsLoaded(const char* filename) const
    //   filename as a path relative to
    //            the include path
    //            the shared library path
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
 
 
    std::string filesStr = "";
@@ -1810,7 +1861,7 @@ Int_t TCling::Load(const char* filename, Bool_t system)
    // Return 0 on success, -1 on failure.
 
    // Used to return 0 on success, 1 on duplicate, -1 on failure, -2 on "fatal".
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    cling::DynamicLibraryManager::LoadLibResult res
       = fInterpreter->getDynamicLibraryManager()->loadLibrary(filename, system);
    if (res == cling::DynamicLibraryManager::kLoadLibSuccess) {
@@ -1846,7 +1897,7 @@ Long_t TCling::ProcessLineSynch(const char* line, EErrorCode* error)
 {
    // Let cling process a command line synchronously, i.e we are waiting
    // it will be finished.
-   R__LOCKGUARD(fLockProcessLine ? gClingMutex : 0);
+   R__LOCKGUARD(fLockProcessLine ? gInterpreterMutex : 0);
    if (gApplication) {
       if (gApplication->IsCmdThread()) {
          return ProcessLine(line, error);
@@ -1873,7 +1924,7 @@ Long_t TCling::Calc(const char* line, EErrorCode* error)
       gROOT->SetLineIsProcessing();
    }
 #endif // R__WIN32
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    if (error) {
       *error = TInterpreter::kNoError;
    }
@@ -1930,7 +1981,7 @@ void TCling::RecursiveRemove(TObject* obj)
 {
    // Delete object from cling symbol table so it can not be used anymore.
    // cling objects are always on the heap.
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    // Note that fgSetOfSpecials is supposed to be updated by TClingCallbacks::tryFindROOTSpecialInternal
    // (but isn't at the moment).
    if (obj->IsOnHeap() && fgSetOfSpecials && !((std::set<TObject*>*)fgSetOfSpecials)->empty()) {
@@ -1950,7 +2001,7 @@ void TCling::Reset()
 
 #if defined(R__MUST_REVISIT)
 #if R__MUST_REVISIT(6,2)
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    Warning("Reset","Cling should support the equivalent of scratch_upto(&fDictPos)");
 #endif
 #endif
@@ -1963,7 +2014,7 @@ void TCling::ResetAll()
 
 #if defined(R__MUST_REVISIT)
 #if R__MUST_REVISIT(6,2)
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    Warning("ResetAll","Cling should support the equivalent of complete reset (unload everything but the startup decls.");
 #endif
 #endif
@@ -1977,7 +2028,7 @@ void TCling::ResetGlobals()
    //
    // Note: Right now, all we do is run the global destructors.
    //
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    fInterpreter->runStaticDestructorsOnce();
 }
 
@@ -1989,7 +2040,7 @@ void TCling::ResetGlobalVar(void* obj)
 
 #if defined(R__MUST_REVISIT)
 #if R__MUST_REVISIT(6,2)
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    Warning("ResetGlobalVar","Cling should support the equivalent of resetglobalvar(obj)");
 #endif
 #endif
@@ -2004,7 +2055,7 @@ void TCling::RewindDictionary()
 
 #if defined(R__MUST_REVISIT)
 #if R__MUST_REVISIT(6,2)
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    Warning("RewindDictionary","Cling should provide a way to revert transaction similar to rewinddictionary()");
 #endif
 #endif
@@ -2018,7 +2069,7 @@ Int_t TCling::DeleteGlobal(void* obj)
 
 #if defined(R__MUST_REVISIT)
 #if R__MUST_REVISIT(6,2)
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    Warning("DeleteGlobal","Cling should provide the equivalent of deleteglobal(obj), see also DeleteVariable.");
 #endif
 #endif
@@ -2037,7 +2088,7 @@ Int_t TCling::DeleteVariable(const char* name)
 #endif
 #endif
 
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    llvm::StringRef srName(name);
    const char* unscopedName = name;
    llvm::StringRef::size_type posScope = srName.rfind("::");
@@ -2088,7 +2139,7 @@ void TCling::SaveContext()
 
 #if defined(R__MUST_REVISIT)
 #if R__MUST_REVISIT(6,2)
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    Warning("SaveContext","Cling should provide a way to record a state watermark similar to store_dictposition(&fDictPos)");
 #endif
 #endif
@@ -2101,7 +2152,7 @@ void TCling::SaveGlobalsContext()
 
 #if defined(R__MUST_REVISIT)
 #if R__MUST_REVISIT(6,2)
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    Warning("SaveGlobalsContext","Cling should provide a way to record a watermark for the list of global variable similar to store_dictposition(&fDictPosGlobals)");
 #endif
 #endif
@@ -2129,7 +2180,7 @@ void TCling::UpdateListOfTypes()
 void TCling::SetClassInfo(TClass* cl, Bool_t reload)
 {
    // Set pointer to the TClingClassInfo in TClass.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    if (cl->fClassInfo && !reload) {
       return;
    }
@@ -2202,7 +2253,7 @@ Bool_t TCling::CheckClassInfo(const char* name, Bool_t autoload /*= kTRUE*/)
    // In case of templates the idea is that everything between the outer
    // '<' and '>' has to be skipped, e.g.: aap<pipo<noot>::klaas>::a_class
 
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    static const char *anonEnum = "anonymous enum ";
    static int cmplen = strlen(anonEnum);
 
@@ -2358,7 +2409,7 @@ Bool_t TCling::CheckClassTemplate(const char *name)
 void TCling::CreateListOfBaseClasses(TClass* cl) const
 {
    // Create list of pointers to base class(es) for TClass cl.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    if (cl->fBase) {
       return;
    }
@@ -2378,7 +2429,7 @@ void TCling::CreateListOfBaseClasses(TClass* cl) const
 void TCling::CreateListOfEnums(TClass* cl) const
 {
    // Create list of pointers to enums for TClass cl.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    if (cl->fEnums) {
       return;
    }
@@ -2409,7 +2460,7 @@ void TCling::CreateListOfEnums(TClass* cl) const
 void TCling::CreateListOfDataMembers(TClass* cl) const
 {
    // Create list of pointers to data members for TClass cl.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    if (cl->fData) {
       return;
    }
@@ -2429,7 +2480,7 @@ void TCling::CreateListOfDataMembers(TClass* cl) const
 void TCling::CreateListOfMethods(TClass* cl) const
 {
    // Create list of pointers to methods for TClass cl.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    if (cl->fMethod) {
       return;
    }
@@ -2481,7 +2532,7 @@ void TCling::UpdateListOfDataMembers(TClass* cl) const
 void TCling::CreateListOfMethodArgs(TFunction* m) const
 {
    // Create list of pointers to method arguments for TMethod m.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    if (m->fMethodArgs) {
       return;
    }
@@ -2660,7 +2711,7 @@ TString TCling::GetMangledName(TClass* cl, const char* method,
    // Return the cling mangled name for a method of a class with parameters
    // params (params is a string of actual arguments, not formal ones). If the
    // class is 0 the global function list will be searched.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    TClingCallFunc func(fInterpreter);
    if (cl) {
       Long_t offset;
@@ -2688,7 +2739,7 @@ TString TCling::GetMangledNameWithPrototype(TClass* cl, const char* method,
    // Return the cling mangled name for a method of a class with a certain
    // prototype, i.e. "char*,int,float". If the class is 0 the global function
    // list will be searched.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    Long_t offset;
    if (cl) {
       return ((TClingClassInfo*)cl->GetClassInfo())->
@@ -2705,7 +2756,7 @@ void* TCling::GetInterfaceMethod(TClass* cl, const char* method,
    // Return pointer to cling interface function for a method of a class with
    // parameters params (params is a string of actual arguments, not formal
    // ones). If the class is 0 the global function list will be searched.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    TClingCallFunc func(fInterpreter);
    if (cl) {
       Long_t offset;
@@ -2729,7 +2780,7 @@ void* TCling::GetInterfaceMethodWithPrototype(TClass* cl, const char* method,
    // Return pointer to cling interface function for a method of a class with
    // a certain prototype, i.e. "char*,int,float". If the class is 0 the global
    // function list will be searched.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    void* f;
    if (cl) {
       Long_t offset;
@@ -2753,7 +2804,7 @@ const char* TCling::GetInterpreterTypeName(const char* name, Bool_t full)
    // by rootcling and by the run-time enviroment (TClass)
    // Return 0 if the name is not known.
 
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
 
    // This first step is likely redundant if
    // the next step never issue any warnings.
@@ -2935,7 +2986,7 @@ void TCling::Execute(const char* function, const char* params, int* error)
    //        should enhance these interfaces so that we can report
    //        compilation and runtime errors properly.
    //
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    if (error) {
       *error = TInterpreter::kNoError;
    }
@@ -2960,7 +3011,7 @@ void TCling::Execute(TObject* obj, TClass* cl, const char* method,
    //        should enhance these interfaces so that we can report
    //        compilation and runtime errors properly.
    //
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    if (error) {
       *error = TInterpreter::kNoError;
    }
@@ -3060,7 +3111,7 @@ void TCling::Execute(TObject* obj, TClass* cl, TMethod* method,
    }
 
    // And now execute it.
-   R__LOCKGUARD2(gClingMutex);
+   R__LOCKGUARD2(gInterpreterMutex);
    if (error) {
       *error = TInterpreter::kNoError;
    }
@@ -3081,7 +3132,7 @@ void TCling::Execute(TObject* obj, TClass* cl, TMethod* method,
 Long_t TCling::ExecuteMacro(const char* filename, EErrorCode* error)
 {
    // Execute a cling macro.
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    return TApplication::ExecuteFile(filename, (int*)error);
 }
 
@@ -3161,7 +3212,7 @@ const char* TCling::TypeName(const char* typeDesc)
    // You need to use the result immediately before it is being overwritten.
    static char* t = 0;
    static unsigned int tlen = 0;
-   R__LOCKGUARD(gClingMutex); // Because of the static array.
+   R__LOCKGUARD(gInterpreterMutex); // Because of the static array.
    unsigned int dlen = strlen(typeDesc);
    if (dlen > tlen) {
       delete[] t;
@@ -3226,6 +3277,137 @@ namespace {
 }
 
 //______________________________________________________________________________
+int TCling::ReadRootmapFile(const char *rootmapfile)
+{
+   // Read and parse a rootmapfile in its new format, and return 0 in case of
+   // success, -1 if the file has already been read, and -3 in case its format
+   // is the old one (e.g. containing "Library.ClassName")
+
+   if (rootmapfile && *rootmapfile) {
+      // Add content of a specific rootmap file
+      if (fRootmapFiles->FindObject(rootmapfile)) return -1;
+      std::ifstream file(rootmapfile);
+      TString lib_name = "";
+      std::string line;
+      while (getline(file, line, '\n')) {
+         if ((line.substr(0, 8) == "Library.") || 
+             (line.substr(0, 8) == "Declare.")) {
+            file.close();
+            return -3; // old format
+         }
+         if (line.substr(0, 9) == "{ decls }") {
+            // forward declarations
+            while (getline(file, line, '\n')) {
+               if (line[0] == '[') break;
+               cling::Transaction* T = 0;
+               fInterpreter->declare(line.c_str(), &T);
+               // Annotate all template params with default args to come from
+               // a rootmap file, such that we avoid diagnostics about duplicate
+               // default arguments.
+               TmpltParamAnnotator TPA;
+               TPA.TraverseDecl(T->getFirstDecl().getSingleDecl());
+            }
+         }
+         if (line[0] == '[') {
+            // new section (library)
+            std::string libs = line.substr(1, line.find(']')-1);
+            while( libs[0] == ' ' ) libs.replace(0, 1, "");
+            if (libs == "")
+               continue;
+            lib_name = libs;
+            TString delim(" ");
+            TObjArray* tokens = lib_name.Tokenize(delim);
+            const char* lib = ((TObjString *)tokens->At(0))->GetName();
+            if (gDebug > 3) {
+               const char* wlib = gSystem->DynamicPathName(lib, kTRUE);
+               if (wlib) {
+                  Info("LoadLibraryMap", "new section for %s", lib_name.Data());
+               }
+               else {
+                  Info("LoadLibraryMap", "section for %s (library does not exist)", lib_name.Data());
+               }
+               delete[] wlib;
+            }
+         }
+         else if (line.substr(0, 6) == "class ") {
+            std::string classname = line.substr(6, line.length()-6);
+            if (gDebug > 6)
+               Info("LoadLibraryMap", "class %s in %s", classname.c_str(), lib_name.Data());
+            if (!fMapfile->Lookup(classname.c_str()))
+               fMapfile->SetValue(classname.c_str(), lib_name.Data());
+         }
+         else if (line.substr(0, 10) == "namespace ") {
+            std::string classname = line.substr(10, line.length()-10);
+            // This is a reference to a substring that lives in fMapfile
+            if (!fMapNamespaces->FindObject(classname.c_str()))
+               fMapNamespaces->Add(new TNamed(classname.c_str(), ""));
+            if (gDebug > 6)
+               Info("LoadLibraryMap", "namespace %s in %s", classname.c_str(), lib_name.Data());
+         }
+      }
+      file.close();
+   }
+   return 0;
+}
+
+//______________________________________________________________________________
+void TCling::InitRootmapFile(const char *name)
+{
+   // Create a resource table and read the (possibly) three resource files, i.e
+   // $ROOTSYS/etc/system<name> (or ROOTETCDIR/system<name>), $HOME/<name> and
+   // ./<name>. ROOT always reads ".rootrc" (in TROOT::InitSystem()). You can
+   // read additional user defined resource files by creating addtional TEnv
+   // objects. By setting the shell variable ROOTENV_NO_HOME=1 the reading of
+   // the $HOME/<name> resource file will be skipped. This might be useful in
+   // case the home directory resides on an automounted remote file system
+   // and one wants to avoid the file system from being mounted.
+
+   Bool_t ignore = fMapfile->IgnoreDuplicates(kFALSE);
+
+   fMapfile->SetRcName(name);
+
+   TString sname = "system";
+   sname += name;
+#ifdef ROOTETCDIR
+   char *s = gSystem->ConcatFileName(ROOTETCDIR, sname);
+#else
+   TString etc = gRootDir;
+#ifdef WIN32
+   etc += "\\etc";
+#else
+   etc += "/etc";
+#endif
+#if defined(R__MACOSX) && (TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
+   // on iOS etc does not exist and system<name> resides in $ROOTSYS
+   etc = gRootDir;
+#endif
+   char *s = gSystem->ConcatFileName(etc, sname);
+#endif
+
+   Int_t ret = ReadRootmapFile(s);
+   if (ret == -3) // old format
+      fMapfile->ReadFile(s, kEnvGlobal);
+   delete [] s;
+   if (!gSystem->Getenv("ROOTENV_NO_HOME")) {
+      s = gSystem->ConcatFileName(gSystem->HomeDirectory(), name);
+      ret = ReadRootmapFile(s);
+      if (ret == -3) // old format
+         fMapfile->ReadFile(s, kEnvUser);
+      delete [] s;
+      if (strcmp(gSystem->HomeDirectory(), gSystem->WorkingDirectory())) {
+         ret = ReadRootmapFile(name);
+         if (ret == -3) // old format
+            fMapfile->ReadFile(name, kEnvLocal);
+      }
+   } else {
+      ret = ReadRootmapFile(name);
+      if (ret == -3) // old format
+         fMapfile->ReadFile(name, kEnvLocal);
+   }
+   fMapfile->IgnoreDuplicates(ignore);
+}
+
+//______________________________________________________________________________
 Int_t TCling::LoadLibraryMap(const char* rootmapfile)
 {
    // Load map between class and library. If rootmapfile is specified a
@@ -3234,15 +3416,16 @@ Int_t TCling::LoadLibraryMap(const char* rootmapfile)
    // The interpreter uses this information to automatically load the shared
    // library for a class (autoload mechanism).
    // See also the AutoLoadCallback() method below.
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    // open the [system].rootmap files
    if (!fMapfile) {
-      fMapfile = new TEnv(".rootmap");
+      fMapfile = new TEnv();
       fMapfile->IgnoreDuplicates(kTRUE);
       fMapNamespaces = new THashTable();
       fMapNamespaces->SetOwner();
       fRootmapFiles = new TObjArray;
       fRootmapFiles->SetOwner();
+      InitRootmapFile(".rootmap");
    }
    // Load all rootmap files in the dynamic load path ((DY)LD_LIBRARY_PATH, etc.).
    // A rootmap file must end with the string ".rootmap".
@@ -3256,11 +3439,11 @@ Int_t TCling::LoadLibraryMap(const char* rootmapfile)
 #endif
       TString d;
       for (Int_t i = 0; i < paths->GetEntriesFast(); i++) {
-         d = ((TObjString*)paths->At(i))->GetString();
+         d = ((TObjString *)paths->At(i))->GetString();
          // check if directory already scanned
          Int_t skip = 0;
          for (Int_t j = 0; j < i; j++) {
-            TString pd = ((TObjString*)paths->At(j))->GetString();
+            TString pd = ((TObjString *)paths->At(j))->GetString();
             if (pd == d) {
                skip++;
                break;
@@ -3283,8 +3466,14 @@ Int_t TCling::LoadLibraryMap(const char* rootmapfile)
                            if (gDebug > 4) {
                               Info("LoadLibraryMap", "   rootmap file: %s", p.Data());
                            }
-                           fMapfile->ReadFile(p, kEnvGlobal);
-                           fRootmapFiles->Add(new TNamed(f, p));
+                           Int_t ret = ReadRootmapFile(p);
+                           if (ret == 0)
+                              fRootmapFiles->Add(new TNamed(gSystem->BaseName(f), p.Data()));
+                           if (ret == -3) {
+                              // old format
+                              fMapfile->ReadFile(p, kEnvGlobal);
+                              fRootmapFiles->Add(new TNamed(f, p));
+                           }
                         }
                         // else {
                         //    fprintf(stderr,"Reject %s because %s is already there\n",p.Data(),f.Data());
@@ -3311,11 +3500,19 @@ Int_t TCling::LoadLibraryMap(const char* rootmapfile)
       }
    }
    if (rootmapfile && *rootmapfile) {
-      // Add content of a specific rootmap file
-      Bool_t ignore = fMapfile->IgnoreDuplicates(kFALSE);
-      fMapfile->ReadFile(rootmapfile, kEnvGlobal);
-      fRootmapFiles->Add(new TNamed(gSystem->BaseName(rootmapfile), rootmapfile));
-      fMapfile->IgnoreDuplicates(ignore);
+      Int_t res = ReadRootmapFile(gSystem->BaseName(rootmapfile));
+      if (res == 0) {
+         //TString p = gSystem->ConcatFileName(gSystem->pwd(), rootmapfile);
+         //fRootmapFiles->Add(new TNamed(gSystem->BaseName(rootmapfile), p.Data()));
+         fRootmapFiles->Add(new TNamed(gSystem->BaseName(rootmapfile), rootmapfile));
+      }
+      else if (res == -3) {
+         // old format
+         Bool_t ignore = fMapfile->IgnoreDuplicates(kFALSE);
+         fMapfile->ReadFile(rootmapfile, kEnvGlobal);
+         fRootmapFiles->Add(new TNamed(gSystem->BaseName(rootmapfile), rootmapfile));
+         fMapfile->IgnoreDuplicates(ignore);
+      }
    }
    TEnvRec* rec;
    TIter next(fMapfile->GetTable());
@@ -3356,8 +3553,6 @@ Int_t TCling::LoadLibraryMap(const char* rootmapfile)
             if (!fMapNamespaces->FindObject(namespaceCand.Data()))
                fMapNamespaces->Add(new TNamed(namespaceCand.Data(), ""));
          }
-
-
          delete tokens;
       }
       else if (!strncmp(cls.Data(), "Declare.", 8) && cls.Length() > 8) {
@@ -3373,7 +3568,6 @@ Int_t TCling::LoadLibraryMap(const char* rootmapfile)
          TmpltParamAnnotator TPA;
          TPA.TraverseDecl(T->getFirstDecl().getSingleDecl());
       }
-
    }
    return 0;
 }
@@ -3476,13 +3670,19 @@ Int_t TCling::UnloadLibraryMap(const char* library)
    if (!fMapfile || !library || !*library) {
       return 0;
    }
-   TEnvRec* rec;
+   TString libname(library);
+   Ssiz_t idx = libname.Last('.');
+   if (idx != kNPOS) {
+      libname.Remove(idx);
+   }
+   size_t len = libname.Length();
+   TEnvRec *rec;
    TIter next(fMapfile->GetTable());
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    Int_t ret = 0;
-   while ((rec = (TEnvRec*) next())) {
+   while ((rec = (TEnvRec *) next())) {
       TString cls = rec->GetName();
-      if (!strncmp(cls.Data(), "Library.", 8) && cls.Length() > 8) {
+      if (cls.Length() > 2) {
          // get the first lib from the list of lib and dependent libs
          TString libs = rec->GetValue();
          if (libs == "") {
@@ -3490,17 +3690,19 @@ Int_t TCling::UnloadLibraryMap(const char* library)
          }
          TString delim(" ");
          TObjArray* tokens = libs.Tokenize(delim);
-         const char* lib = ((TObjString*)tokens->At(0))->GetName();
-         // convert "@@" to "::", we used "@@" because TEnv
-         // considers "::" a terminator
-         cls.Remove(0, 8);
-         cls.ReplaceAll("@@", "::");
-         // convert "-" to " ", since class names may have
-         // blanks and TEnv considers a blank a terminator
-         cls.ReplaceAll("-", " ");
-         if (!strcmp(library, lib)) {
+         const char* lib = ((TObjString *)tokens->At(0))->GetName();
+         if (!strncmp(cls.Data(), "Library.", 8) && cls.Length() > 8) {
+            // convert "@@" to "::", we used "@@" because TEnv
+            // considers "::" a terminator
+            cls.Remove(0, 8);
+            cls.ReplaceAll("@@", "::");
+            // convert "-" to " ", since class names may have
+            // blanks and TEnv considers a blank a terminator
+            cls.ReplaceAll("-", " ");
+         }
+         if (!strncmp(lib, libname.Data(), len)) {
             if (fMapfile->GetTable()->Remove(rec) == 0) {
-               Error("UnloadLibraryMap", "entry for <%s,%s> not found in library map table", cls.Data(), lib);
+               Error("UnloadLibraryMap", "entry for <%s, %s> not found in library map table", cls.Data(), lib);
                ret = -1;
             }
          }
@@ -3509,9 +3711,10 @@ Int_t TCling::UnloadLibraryMap(const char* library)
    }
    if (ret >= 0) {
       TString library_rootmap(library);
-      library_rootmap.Append(".rootmap");
+      if (!library_rootmap.EndsWith(".rootmap"))
+         library_rootmap.Append(".rootmap");
       TNamed* mfile = 0;
-      while ((mfile = (TNamed*)fRootmapFiles->FindObject(library_rootmap))) {
+      while ((mfile = (TNamed *)fRootmapFiles->FindObject(library_rootmap))) {
          fRootmapFiles->Remove(mfile);
          delete mfile;
       }
@@ -3520,6 +3723,7 @@ Int_t TCling::UnloadLibraryMap(const char* library)
    return ret;
 }
 
+//______________________________________________________________________________
 Int_t TCling::SetClassSharedLibs(const char *cls, const char *libs)
 {
    // Register the autoloading information for a class.
@@ -3536,9 +3740,9 @@ Int_t TCling::SetClassSharedLibs(const char *cls, const char *libs)
    // blanks and TEnv considers a blank a terminator
    key.ReplaceAll(" ", "-");
 
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    if (!fMapfile) {
-      fMapfile = new TEnv(".rootmap");
+      fMapfile = new TEnv();
       fMapfile->IgnoreDuplicates(kTRUE);
       fMapNamespaces = new THashTable();
       fMapNamespaces->SetOwner();
@@ -3546,8 +3750,10 @@ Int_t TCling::SetClassSharedLibs(const char *cls, const char *libs)
       fRootmapFiles = new TObjArray;
       fRootmapFiles->SetOwner();
 
+      InitRootmapFile(".rootmap");
    }
-   fMapfile->SetValue(key,libs);
+   //fMapfile->SetValue(key, libs);
+   fMapfile->SetValue(cls, libs);
    return 1;
 }
 
@@ -3556,7 +3762,7 @@ Int_t TCling::AutoLoad(const char* cls)
 {
    // Load library containing the specified class. Returns 0 in case of error
    // and 1 in case if success.
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
    Int_t status = 0;
    if (!gROOT || !gInterpreter || gROOT->TestBit(TObject::kInvalidObject)) {
       return status;
@@ -3699,26 +3905,36 @@ const char* TCling::GetClassSharedLibs(const char* cls)
    // The first library in the list is the one containing the class, the
    // others are the libraries the first one depends on. Returns 0
    // in case the library is not found.
+
    if (!cls || !*cls) {
       return 0;
    }
    // lookup class to find list of libraries
    if (fMapfile) {
-      TString c = TString("Library.") + cls;
-      // convert "::" to "@@", we used "@@" because TEnv
-      // considers "::" a terminator
-      c.ReplaceAll("::", "@@");
-      // convert "-" to " ", since class names may have
-      // blanks and TEnv considers a blank a terminator
-      c.ReplaceAll(" ", "-");
-      // Use TEnv::Lookup here as the rootmap file must start with Library.
-      // and do not support using any stars (so we do not need to waste time
-      // with the search made by TEnv::GetValue).
       TEnvRec* libs_record = 0;
-      libs_record = fMapfile->Lookup(c);
+      libs_record = fMapfile->Lookup(cls);
       if (libs_record) {
          const char* libs = libs_record->GetValue();
          return (*libs) ? libs : 0;
+      } 
+      else {
+         // Try the old format...
+         TString c = TString("Library.") + cls;
+         // convert "::" to "@@", we used "@@" because TEnv
+         // considers "::" a terminator
+         c.ReplaceAll("::", "@@");
+         // convert "-" to " ", since class names may have
+         // blanks and TEnv considers a blank a terminator
+         c.ReplaceAll(" ", "-");
+         // Use TEnv::Lookup here as the rootmap file must start with Library.
+         // and do not support using any stars (so we do not need to waste time
+         // with the search made by TEnv::GetValue).
+         TEnvRec* libs_record = 0;
+         libs_record = fMapfile->Lookup(c);
+         if (libs_record) {
+            const char* libs = libs_record->GetValue();
+            return (*libs) ? libs : 0;
+         }
       }
    }
    return 0;
@@ -3784,7 +4000,7 @@ const char* TCling::GetIncludePath()
    // Refresh the list of include paths known to the interpreter and return it
    // with -I prepended.
 
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
 
    fIncludePath = "";
 
@@ -4210,6 +4426,14 @@ bool TCling::CallFunc_IsValid(CallFunc_t* func) const
 }
 
 //______________________________________________________________________________
+TInterpreter::CallFuncIFacePtr_t
+TCling::CallFunc_IFacePtr(CallFunc_t * func) const
+{
+   TClingCallFunc* f = (TClingCallFunc*) func;
+   return f->IFacePtr();
+}
+
+//______________________________________________________________________________
 void TCling::CallFunc_ResetArg(CallFunc_t* func) const
 {
    TClingCallFunc* f = (TClingCallFunc*) func;
@@ -4571,6 +4795,15 @@ BaseClassInfo_t* TCling::BaseClassInfo_Factory(ClassInfo_t* cinfo) const
 }
 
 //______________________________________________________________________________
+BaseClassInfo_t* TCling::BaseClassInfo_Factory(ClassInfo_t* derived,
+   ClassInfo_t* base) const
+{
+   TClingClassInfo* TClinginfo = (TClingClassInfo*) derived;
+   TClingClassInfo* TClinginfoBase = (TClingClassInfo*) base;
+   return (BaseClassInfo_t*) new TClingBaseClassInfo(fInterpreter, TClinginfo, TClinginfoBase);
+}
+
+//______________________________________________________________________________
 int TCling::BaseClassInfo_Next(BaseClassInfo_t* bcinfo) const
 {
    TClingBaseClassInfo* TClinginfo = (TClingBaseClassInfo*) bcinfo;
@@ -4585,10 +4818,23 @@ int TCling::BaseClassInfo_Next(BaseClassInfo_t* bcinfo, int onlyDirect) const
 }
 
 //______________________________________________________________________________
-Long_t TCling::BaseClassInfo_Offset(BaseClassInfo_t* bcinfo) const
+Long_t TCling::BaseClassInfo_Offset(BaseClassInfo_t* bcinfo, void * address) const
 {
    TClingBaseClassInfo* TClinginfo = (TClingBaseClassInfo*) bcinfo;
-   return TClinginfo->Offset();
+   return TClinginfo->Offset(address);
+}
+
+//______________________________________________________________________________
+Long_t TCling::ClassInfo_GetBaseOffset(ClassInfo_t* derived, ClassInfo_t* target, void * address) const
+{
+   TClingClassInfo* TClinginfo = (TClingClassInfo*) derived;
+   TClingClassInfo* TClinginfoTarget = (TClingClassInfo*) target;
+   // Offset to the class itself.
+   if (TClinginfo->GetDecl() == TClinginfoTarget->GetDecl()) {
+      return 0;
+   }
+   TClingBaseClassInfo binfo(fInterpreter, TClinginfo, TClinginfoTarget);
+   return binfo.Offset(address);
 }
 
 //______________________________________________________________________________

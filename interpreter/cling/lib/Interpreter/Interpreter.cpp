@@ -81,6 +81,10 @@ namespace cling {
 
 
 namespace cling {
+
+  // FIXME: workaround until JIT supports exceptions
+  jmp_buf* Interpreter::m_JumpBuf;
+
 #if (!_WIN32)
   // "Declared" to the JIT in RuntimeUniverse.h
   namespace runtime {
@@ -122,7 +126,7 @@ namespace cling {
       assert(T == m_Transaction && "Ended different transaction?");
       m_Interpreter->m_IncrParser->commitTransaction(T);
     }
-  }  
+  }
 
   // This function isn't referenced outside its translation unit, but it
   // can't use the "static" keyword because its address is used for
@@ -261,6 +265,8 @@ namespace cling {
   }
 
   Interpreter::~Interpreter() {
+    if (m_ExecutionContext)
+      m_ExecutionContext->shuttingDown();
     getCI()->getDiagnostics().getClient()->EndSourceFile();
   }
 
@@ -306,17 +312,20 @@ namespace cling {
   }
 
   void Interpreter::storeInterpreterState(const std::string& name) const {
+    // This may induce deserialization
+    PushTransactionRAII RAII(this);
     ClangInternalState* state 
-      = new ClangInternalState(getCI()->getASTContext(), name);
+      = new ClangInternalState(getCI()->getASTContext(), *getModule(), name);
     m_StoredStates.push_back(state);
   }
 
   void Interpreter::compareInterpreterState(const std::string& name) const {
-    ClangInternalState* state 
-      = new ClangInternalState(getCI()->getASTContext(), name);    
+    // This may induce deserialization
+    PushTransactionRAII RAII(this);
+    ClangInternalState state(getCI()->getASTContext(), *getModule(), name);    
     for (unsigned i = 0, e = m_StoredStates.size(); i != e; ++i) {
       if (m_StoredStates[i]->getName() == name) {
-        state->compare(*m_StoredStates[i]);
+        m_StoredStates[i]->compare(state);
         m_StoredStates.erase(m_StoredStates.begin() + i);
         break;
       }

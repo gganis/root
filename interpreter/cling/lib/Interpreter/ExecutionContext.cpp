@@ -39,7 +39,9 @@ ExecutionContext::ExecutionContext(llvm::Module* m)
 }
 
 // Keep in source: ~OwningPtr<ExecutionEngine> needs #include ExecutionEngine
-ExecutionContext::~ExecutionContext() {
+ExecutionContext::~ExecutionContext() {}
+
+void ExecutionContext::shuttingDown() {
   for (size_t I = 0, N = m_AtExitFuncs.size(); I < N; ++I) {
     const CXAAtExitElement& AEE = m_AtExitFuncs[N - I - 1];
     (*AEE.m_Func)(AEE.m_Arg);
@@ -128,6 +130,7 @@ freeCallersOfUnresolvedSymbols(llvm::SmallVectorImpl<llvm::Function*>&
   llvm::SmallPtrSet<llvm::Function*, 40> funcsToFreeUnique;
   for (size_t i = 0; i < funcsToFree.size(); ++i) {
     llvm::Function* func = funcsToFree[i];
+    assert(func && "Cannot free NULL function");
     if (funcsToFreeUnique.insert(func)) {
       for (llvm::Value::use_iterator IU = func->use_begin(),
              EU = func->use_end(); IU != EU; ++IU) {
@@ -190,8 +193,9 @@ ExecutionContext::executeFunction(llvm::StringRef funcname,
                    << "' unresolved while linking function '" << funcname
                    << "'!\n";
       llvm::Function *ff = m_engine->FindFunctionNamed(i->c_str());
-      assert(ff && "cannot find function to free");
-      funcsToFree.push_back(ff);
+      // i could also reference a global variable, in which case ff == 0.
+      if (ff)
+        funcsToFree.push_back(ff);
     }
     freeCallersOfUnresolvedSymbols(funcsToFree, m_engine.get());
     m_unresolvedSymbols.clear();

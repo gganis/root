@@ -69,7 +69,7 @@ static std::string FullyQualifiedName(const Decl *decl) {
 }
 
 TClingClassInfo::TClingClassInfo(cling::Interpreter *interp)
-   : fInterp(interp), fFirstTime(true), fDescend(false), fDecl(0), fType(0)
+   : fInterp(interp), fFirstTime(true), fDescend(false), fDecl(0), fType(0), fOffsetFunctions(0)
 {
    TranslationUnitDecl *TU =
       interp->getCI()->getASTContext().getTranslationUnitDecl();
@@ -96,7 +96,7 @@ TClingClassInfo::TClingClassInfo(cling::Interpreter *interp)
 
 TClingClassInfo::TClingClassInfo(cling::Interpreter *interp, const char *name)
    : fInterp(interp), fFirstTime(true), fDescend(false), fDecl(0), fType(0),
-     fTitle("")
+     fTitle(""), fOffsetFunctions(0)
 {
    const cling::LookupHelper& lh = fInterp->getLookupHelper();
    const Type *type = 0;
@@ -118,9 +118,17 @@ TClingClassInfo::TClingClassInfo(cling::Interpreter *interp, const char *name)
 TClingClassInfo::TClingClassInfo(cling::Interpreter *interp,
                                  const Type &tag)
    : fInterp(interp), fFirstTime(true), fDescend(false), fDecl(0), fType(0), 
-     fTitle("")
+     fTitle(""), fOffsetFunctions(0)
 {
    Init(tag);
+}
+
+void TClingClassInfo::AddBaseOffsetFunction(const clang::Decl* decl, OffsetPtrFunc_t func)
+{
+   // Add a function pointer for the offset from this class to the base class
+   // determined by the parameter decl.
+
+   fOffsetFunctions[decl] = func;
 }
 
 long TClingClassInfo::ClassProperty() const
@@ -222,6 +230,14 @@ void TClingClassInfo::Destruct(void *arena) const
    }
    TClingCallFunc cf(fInterp);
    cf.ExecDestructor(this, arena, /*nary=*/0, /*withFree=*/false);
+}
+
+OffsetPtrFunc_t TClingClassInfo::FindBaseOffsetFunction(const clang::Decl* decl) const
+{
+   // Find a pointer function for computing the offset to the base class determined 
+   // by the parameter decl.
+   
+   return fOffsetFunctions.lookup(decl);
 }
 
 TClingMethodInfo TClingClassInfo::GetMethod(const char *fname,
@@ -453,6 +469,19 @@ long TClingClassInfo::GetOffset(const CXXMethodDecl* md) const
    return offset;
 }
 
+static bool HasBody(const clang::FunctionDecl &decl, const cling::Interpreter &interp)
+{
+   if (decl.hasBody()) return true;
+   
+   std::string mangledName;
+   interp.maybeMangleDeclName(&decl, mangledName);
+
+   void *GV = interp.getAddressOfGlobal(mangledName.c_str());
+   if (GV) return true;
+
+   return false;
+}
+
 bool TClingClassInfo::HasDefaultConstructor() const
 {
    // Return true if there a constructor taking no arguments (including
@@ -481,13 +510,13 @@ bool TClingClassInfo::HasDefaultConstructor() const
    for (CXXRecordDecl::ctor_iterator I = CRD->ctor_begin(),
          E = CRD->ctor_end(); I != E; ++I) {
       if (I->getMinRequiredArguments() == 0) {
-         if (I->hasBody() && (I->getAccess() == AS_public)) {
+         if ((I->getAccess() == AS_public) && HasBody(**I,*fInterp)) {
             return true;
          }
          if (I->isTemplateInstantiation()) {
             const clang::FunctionDecl* FD =
                I->getInstantiatedFromMemberFunction();
-            if (FD->hasBody() && (FD->getAccess() == AS_public)) {
+            if ((FD->getAccess() == AS_public) && HasBody(*FD,*fInterp)) {
                return true;
             }
          }

@@ -10,10 +10,13 @@ ROOT_EXECUTABLE(rootcling src/LinkdefReader.cxx
                           ${CMAKE_SOURCE_DIR}/core/metautils/src/TMetaUtils.cxx
                           $<TARGET_OBJECTS:Clib>
                           $<TARGET_OBJECTS:MetaUtils> $<TARGET_OBJECTS:MetaUtilsLLVM>
-                          LIBRARIES ${CLING_LIBRARIES} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+                          LIBRARIES ${CLING_LIBRARIES} ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_TINFO_LIBS})
+
 add_dependencies(rootcling CLING LLVMRES)
+
 add_custom_command(TARGET rootcling POST_BUILD
-                  COMMAND ${CMAKE_COMMAND} -E create_symlink rootcling ../../bin/rootcint)
+                   COMMAND ln -f ../../bin/rootcling ../../bin/rootcint
+                   COMMAND ln -f ../../bin/rootcling ../../bin/genreflex)
 
 add_custom_command(OUTPUT rootcling_tmp.cxx
                    COMMAND cmake -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/src/rootcling.cxx rootcling_tmp.cxx )
@@ -23,7 +26,7 @@ ROOT_EXECUTABLE(rootcling_tmp src/LinkdefReader.cxx
                               ${CMAKE_SOURCE_DIR}/core/metautils/src/TMetaUtils.cxx
                               $<TARGET_OBJECTS:Clib> 
                               $<TARGET_OBJECTS:MetaUtils> $<TARGET_OBJECTS:MetaUtilsLLVM>
-                              LIBRARIES ${CLING_LIBRARIES}  ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT})
+                              LIBRARIES ${CLING_LIBRARIES}  ${CMAKE_DL_LIBS} ${CMAKE_THREAD_LIBS_INIT} ${CMAKE_TINFO_LIBS})
 add_dependencies(rootcling_tmp CLING LLVMRES)
 set_source_files_properties(src/LinkdefReader.cxx PROPERTIES COMPILE_FLAGS -fno-rtti)
 

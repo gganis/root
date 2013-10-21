@@ -330,8 +330,9 @@ set(hasxft ${has${xft}})
 set(hascling ${has${cling}})
 set(haslzmacompression ${has${lzma}})
 set(hascocoa ${has${cocoa}})
+set(hasvc ${has${vc}})
 set(usec++11 ${has${cxx11}})
-set(uselibc++11 ${has${libcxx11}})
+set(uselibc++ ${has${libcxx}})
 set(hasllvm undef)
 set(llvmdir /**/)
 if(gcctoolchain)
@@ -342,6 +343,7 @@ endif()
 
 #---root-config----------------------------------------------------------------------------------------------
 ROOT_SHOW_OPTIONS(features)
+string(REPLACE "c++11" "cxx11" features ${features}) # change the name of the c++11 feature needed for root-config.in
 set(configfeatures ${features})
 set(configargs ${ROOT_CONFIGARGS})
 set(configoptions ${ROOT_CONFIGARGS})

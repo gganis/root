@@ -80,7 +80,7 @@ ROOT_BUILD_OPTION(builtin_cfitsio OFF "Built the FITSIO library internally (down
 ROOT_BUILD_OPTION(builtin_xrootd OFF "Built the XROOTD internally (downloading tarfile from the Web)")
 ROOT_BUILD_OPTION(builtin_llvm ON "Built the LLVM internally")
 ROOT_BUILD_OPTION(cxx11 OFF "Build using C++11 compatible mode, requires gcc > 4.7.x or clang")
-ROOT_BUILD_OPTION(libcxx11 OFF "Build using libc++, requires cxx11 option (MacOS X only, for the time being)")
+ROOT_BUILD_OPTION(libcxx OFF "Build using libc++, requires cxx11 option (MacOS X only, for the time being)")
 ROOT_BUILD_OPTION(castor ON "CASTOR support, requires libshift from CASTOR >= 1.5.2")
 ROOT_BUILD_OPTION(chirp ON "Chirp support (Condor remote I/O), requires libchirp_client")
 ROOT_BUILD_OPTION(cintex ON "Build the libCintex Reflex interface library")
@@ -95,6 +95,7 @@ ROOT_BUILD_OPTION(fitsio ON "Read images and data from FITS files, requires cfit
 set(gcctoolchain "" CACHE PATH "Path for the gcctoolchain in case not the system gcc is used to build clang/LLVM")
 ROOT_BUILD_OPTION(gviz ON "Graphs visualization support, requires graphviz")
 ROOT_BUILD_OPTION(gdml OFF "GDML writer and reader")
+ROOT_BUILD_OPTION(geocad OFF "ROOT-CAD Interface")
 ROOT_BUILD_OPTION(genvector ON "Build the new libGenVector library")
 ROOT_BUILD_OPTION(gfal ON "GFAL support, requires libgfal")
 ROOT_BUILD_OPTION(glite ON "gLite support, requires libglite-api-wrapper v.3 from GSI (https://subversion.gsi.de/trac/dgrid/wiki)")
@@ -134,6 +135,7 @@ ROOT_BUILD_OPTION(ssl ON "SSL encryption support, requires openssl")
 ROOT_BUILD_OPTION(table OFF "Build libTable contrib library")
 ROOT_BUILD_OPTION(tmva ON "Build TMVA multi variate analysis library")
 ROOT_BUILD_OPTION(unuran OFF "UNURAN - package for generating non-uniform random numbers")
+ROOT_BUILD_OPTION(vc OFF "Vc adds a few new types for portable and intuitive SIMD programming")
 ROOT_BUILD_OPTION(winrtdebug OFF "Link against the Windows debug runtime library")
 ROOT_BUILD_OPTION(xft ON "Xft support (X11 antialiased fonts)")
 ROOT_BUILD_OPTION(xml ON "XML parser interface")
@@ -143,7 +145,20 @@ ROOT_BUILD_OPTION(xrootd ON "Build xrootd file server and its client (if support
 option(fail-on-missing "Fail the configure step if a required external package is missing" OFF)
 option(minimal "Do not automatically search for support libraries" OFF)
 option(gminimal "Do not automatically search for support libraries, but include X11" OFF)
+option(all "Enable all optional components" OFF)
 option(testing "Enable testing with CTest" OFF)
+
+if(all)
+ set(gdml    ON CACHE BOOL "" FORCE)
+ #set(geocad  ON CACHE BOOL "" FORCE)  #not supported yet
+ set(qt      ON CACHE BOOL "" FORCE)
+ set(qtgsi   ON CACHE BOOL "" FORCE)
+ set(roofit  ON CACHE BOOL "" FORCE)
+ #set(ruby    ON CACHE BOOL "" FORCE)  #not supported in ROOT v6.0.0 yet
+ set(minuit2 ON CACHE BOOL "" FORCE)
+ set(table   ON CACHE BOOL "" FORCE)
+ set(unuran  ON CACHE BOOL "" FORCE)
+endif()
 
 #---General Build options----------------------------------------------------------------------
 # use, i.e. don't skip the full RPATH for the build tree

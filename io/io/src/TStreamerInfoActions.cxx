@@ -490,7 +490,7 @@ namespace TStreamerInfoActions
             char endbuf[TVirtualCollectionProxy::fgIteratorArenaSize];
             void *begin = &(startbuf[0]);
             void *end = &(endbuf[0]);
-            config->fCreateIterators(alternative, &begin, &end );
+            config->fCreateIterators(alternative, &begin, &end, oldProxy);
             // We can not get here with a split vector of pointer, so we can indeed assume
             // that actions->fConfiguration != null.
             buf.ApplySequence(*actions, begin, end);
@@ -565,7 +565,7 @@ namespace TStreamerInfoActions
                char endbuf[TVirtualCollectionProxy::fgIteratorArenaSize];
                void *begin = &(startbuf[0]);
                void *end = &(endbuf[0]);
-               config->fCreateIterators(alternative, &begin, &end );
+               config->fCreateIterators(alternative, &begin, &end, oldProxy);
                // We can not get here with a split vector of pointer, so we can indeed assume
                // that actions->fConfiguration != null.
                buf.ApplySequence(*actions, begin, end);
@@ -643,7 +643,7 @@ namespace TStreamerInfoActions
             char endbuf[TVirtualCollectionProxy::fgIteratorArenaSize];
             void *begin = &(startbuf[0]);
             void *end = &(endbuf[0]);
-            config->fCreateIterators( alternative, &begin, &end );
+            config->fCreateIterators( alternative, &begin, &end, newProxy);
             // We can not get here with a split vector of pointer, so we can indeed assume
             // that actions->fConfiguration != null.
             buf.ApplySequence(*actions, begin, end);
@@ -692,7 +692,7 @@ namespace TStreamerInfoActions
                char endbuf[TVirtualCollectionProxy::fgIteratorArenaSize];
                void *begin = &(startbuf[0]);
                void *end = &(endbuf[0]);
-               config->fCreateIterators( alternative, &begin, &end );
+               config->fCreateIterators( alternative, &begin, &end, newProxy);
                // We can not get here with a split vector of pointer, so we can indeed assume
                // that actions->fConfiguration != null.
                buf.ApplySequence(*actions, begin, end);
@@ -1517,7 +1517,7 @@ namespace TStreamerInfoActions
             char endbuf[TVirtualCollectionProxy::fgIteratorArenaSize];
             void *begin = &(startbuf[0]);
             void *end = &(endbuf[0]);
-            config->fCreateIterators(alternative, &begin, &end );
+            config->fCreateIterators(alternative, &begin, &end, newProxy);
             // We can not get here with a split vector of pointer, so we can indeed assume
             // that actions->fConfiguration != null.
 
@@ -1872,7 +1872,7 @@ namespace TStreamerInfoActions
             char endbuf[TVirtualCollectionProxy::fgIteratorArenaSize];
             void *begin = &(startbuf[0]);
             void *end = &(endbuf[0]);
-            config->fCreateIterators(alternative, &begin, &end );
+            config->fCreateIterators(alternative, &begin, &end, newProxy);
             // We can not get here with a split vector of pointer, so we can indeed assume
             // that actions->fConfiguration != null.
             
@@ -2256,7 +2256,7 @@ void TStreamerInfo::Compile()
    // Store predigested information into local arrays. This saves a huge amount
    // of time compared to an explicit iteration on all elements.
 
-   R__LOCKGUARD(gClingMutex);
+   R__LOCKGUARD(gInterpreterMutex);
 
    // fprintf(stderr,"Running Compile for %s %d %d req=%d,%d\n",GetName(),fClassVersion,fOptimized,CanOptimize(),TestBit(kCannotOptimize));
 

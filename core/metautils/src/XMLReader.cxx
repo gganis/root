@@ -49,6 +49,8 @@ void XMLReader::PopulateMap(){
    XMLReader::fgMapTagNames["version"] = kVersion;
    XMLReader::fgMapTagNames["ioread"] = kBeginIoread;
    XMLReader::fgMapTagNames["/ioread"] = kEndIoread;
+   XMLReader::fgMapTagNames["read"] = kBeginIoread;
+   XMLReader::fgMapTagNames["/read"] = kEndIoread;
 }
 
 /*
@@ -560,6 +562,7 @@ bool XMLReader::Parse(std::ifstream &file, SelectionRules& out)
                      break;
                   }                  
                   codeAttrVal+=lineStr; // here because data can be on one line!
+                  codeAttrVal+="\n";
                   file.getline(lineChars,lineCharsSize);
                   lineStr=lineChars;
                }
@@ -742,10 +745,10 @@ bool XMLReader::Parse(std::ifstream &file, SelectionRules& out)
 
             std::stringstream pragmaLineStream;
             pragmaLineStream << "sourceClass=\"" << pragmaArgs["sourceClass"] << "\""
-                             << " targetClass=\""<< pragmaArgs["sourceClass"] << "\""
                              << " version=\""<< pragmaArgs["version"] << "\""
-                             << " source=\""<< pragmaArgs["source"] << "\""
+                             << " targetClass=\""<< pragmaArgs["targetClass"] << "\""
                              << " target=\""<< pragmaArgs["target"] << "\""
+                             << " source=\""<< pragmaArgs["source"] << "\""
                              << " code=\"{"+pragmaArgs["code"]+"}\"";
                              
             // Now send them to the pragma processor. The info will be put

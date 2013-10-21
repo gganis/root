@@ -1409,12 +1409,16 @@ void TBranchElement::FillLeavesCollection(TBuffer& b)
    b << n;
 
    if(fSTLtype != TClassEdit::kVector && proxy->HasPointers() && fSplitLevel > TTree::kSplitCollectionOfPointers ) {
-      fPtrIterators->CreateIterators(fObject);
+      fPtrIterators->CreateIterators(fObject, proxy);
    } else {
       //NOTE: this does not work for not vectors since the CreateIterators expects a TGenCollectionProxy::TStaging as its argument!
       //NOTE: and those not work in general yet, since the TStaging object is neither created nor passed.
-      //  We need to review how to avoid the need for a TStaging during the reading.
-      fIterators->CreateIterators(fObject);
+      //  We need to review how to avoid the need for a TStaging during the writing.
+      if (proxy->GetProperties() & TVirtualCollectionProxy::kIsAssociative) {
+         // do nothing for now ...
+      } else {
+         fIterators->CreateIterators(fObject, proxy);
+      }
    }
 
 }
@@ -2685,6 +2689,8 @@ void TBranchElement::InitializeOffsets()
          } else {
             renamed = branchClass && branchElem->GetNewClass() && (branchClass != branchElem->GetNewClass());
          }
+      } else {
+         renamed = fTargetClass != fBranchClass;
       }
       if (!branchClass) {
          Error("InitializeOffsets", "Could not find class for branch: %s", GetName());
@@ -2721,7 +2727,8 @@ void TBranchElement::InitializeOffsets()
 
          if (renamed) {
             if (subBranch->fBranchClass == branchClass) {
-               subBranch->SetTargetClass( branchElem->GetNewClass()->GetName());
+               if (branchElem) subBranch->SetTargetClass(branchElem->GetNewClass()->GetName());
+               else subBranch->SetTargetClass(fTargetClass->GetName());
             }
          }
 
@@ -3705,9 +3712,9 @@ void TBranchElement::ReadLeavesCollection(TBuffer& b)
    TVirtualCollectionProxy::TPushPop helper(proxy, fObject);
    void* alternate = proxy->Allocate(fNdata, true);
    if(fSTLtype != TClassEdit::kVector && proxy->HasPointers() && fSplitLevel > TTree::kSplitCollectionOfPointers ) {
-      fPtrIterators->CreateIterators(alternate);
+      fPtrIterators->CreateIterators(alternate, proxy);
    } else {
-      fIterators->CreateIterators(alternate);
+      fIterators->CreateIterators(alternate, proxy);
    }
 
    Int_t nbranches = fBranches.GetEntriesFast();

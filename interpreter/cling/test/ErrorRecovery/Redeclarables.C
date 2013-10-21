@@ -1,4 +1,4 @@
-// RUN: cat %s | %cling -Xclang -verify 2>&1 | FileCheck %s
+// RUN: cat %s | %cling -I%p -Xclang -verify 2>&1 | FileCheck %s
 
 // Test the removal of decls from the redeclaration chain, which are marked as
 // redeclarables.
@@ -11,7 +11,7 @@ int my_funct();
 .storeState "testRedeclarables"
 #include "Redeclarables.h"
 .compareState "testRedeclarables"
-// CHECK-NOT: File with AST differencies stored in: testRedeclarablesAST.diff
+// CHECK-NOT: Differences
 
 .rawInput 1
 int my_funct() { 

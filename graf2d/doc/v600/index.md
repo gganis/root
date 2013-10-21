@@ -98,6 +98,10 @@ file `simple.pdf`.
 
 -   New drawing option "SC" to draw the labels with the slices' colors.
 
+### TLine
+
+-   Add `SetNDC`.
+
 ### TMathText
 
 -   TMathText's purpose is to write mathematical equations, exactly as
@@ -124,6 +128,7 @@ file `simple.pdf`.
    ![TMathText example](mathtext.png "TMathText example")
    
 -   Implement `\\frac` using `\\over`.
+-   Treat `\\mbox` as `\\hbox` to improve the compatibility with TTexDump.
 
 ### TLatex
 
@@ -141,5 +146,9 @@ file `simple.pdf`.
 ```
 
 -   Implement `#backslash`.
--   Implement `DrawLatexNDC`
-
+-   Implement `DrawLatexNDC`.
+-   Implement `#minus` and `#plus` typographically better than the 
+    standard `"-"` and `"+"`.
+-   Make sure all greek and math symbols are printed correctly by `TTexDump`.
+-   Implement dummy operators `#mbox` and `#hbox` to improve the compatibility 
+    between `TLatex`, `TMathText` and `TTexDump`.

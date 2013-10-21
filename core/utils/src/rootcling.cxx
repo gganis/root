@@ -364,7 +364,7 @@ void AnnotateFieldDecl(clang::NamedDecl& decl,
    clang::ASTContext &C = decl.getASTContext();
    clang::SourceRange commentRange; // Empty: this is a fake comment
    
-   const std::string declName (decl.getName());
+   const std::string declName (decl.getNameAsString());
    std::string varName;
    for(std::list<VariableSelectionRule>::const_iterator it = fieldSelRules.begin();
        it != fieldSelRules.end(); ++it){
@@ -390,13 +390,16 @@ void AnnotateFieldDecl(clang::NamedDecl& decl,
    }
 }
 
-// In order to store the meaningful for the IO comments we have to transform
-// the comment into annotation of the given decl.
-// This works only with comments in the headers, so no selectionrules in an xml
-// file.
+//______________________________________________________________________________
 void AnnotateDecl(clang::CXXRecordDecl &CXXRD,
                   SelectionRules& selectionRules)
 {
+
+   // In order to store the meaningful for the IO comments we have to transform
+   // the comment into annotation of the given decl.
+   // This works only with comments in the headers, so no selectionrules in an xml
+   // file.   
+   
    using namespace clang;
    SourceLocation commentSLoc;
    llvm::StringRef comment;
@@ -529,27 +532,12 @@ bool InheritsFromTSelector(const clang::RecordDecl *cl,
    return ROOT::TMetaUtils::R__IsBase(llvm::dyn_cast<clang::CXXRecordDecl>(cl), TObject_decl);
 }
 
-// Not used, there for historical reasons?
-//______________________________________________________________________________
-// void R__GetName(std::string &qual_name, const clang::NamedDecl *cl)
-// {
-//    llvm::raw_string_ostream stream(qual_name);
-//    cl->getNameForDiagnostic(stream,cl->getASTContext().getPrintingPolicy(),false); // qual_name = N->getQualifiedNameAsString();
-// }
-
 //______________________________________________________________________________
 inline bool R__IsTemplate(const clang::Decl &cl)
 {
    return (cl.getKind() == clang::Decl::ClassTemplatePartialSpecialization
            || cl.getKind() == clang::Decl::ClassTemplateSpecialization);
 }
-
-// Not used, there for historical reasons?
-//______________________________________________________________________________
-// inline bool R__IsTemplate(const clang::CXXRecordDecl *cl)
-// {
-//   return cl->getTemplateSpecializationKind() != clang::TSK_Undeclared;
-// }
 
 //______________________________________________________________________________
 bool IsSelectionXml(const char *filename)
@@ -742,9 +730,14 @@ void LoadLibraryMap()
 
       string line;
       string classname;
+      bool new_format = false;
 
       while ( file >> line ) {
 
+         if ((line[0] == '[') || ((line[0] == '{'))) {
+            new_format = true;
+            break;
+         }
          if (line.substr(0,8)=="Library.") {
 
             int pos = line.find(":",8);
@@ -804,6 +797,61 @@ void LoadLibraryMap()
          }
       }
       file.close();
+      if (new_format) {
+         string libs = "";
+         ifstream newfile(filename.c_str());
+         while (getline(newfile, line, '\n')) {
+            if (line == "{ decls }") {
+               while (getline(newfile, line, '\n')) {
+                  if (line[0] == '[') break;
+               }
+            }
+            if (line[0] == '[') {
+               // new section
+               libs = line.substr(1, line.find(']')-1);
+               while( libs[0] == ' ' ) libs.replace(0, 1, "");
+            }
+            else if (line.substr(0, 6) == "class ") {
+               classname = line.substr(6, line.length()-6);
+               if ( strchr(classname.c_str(),':') != 0 ) {
+                  // We have a namespace and we have to check it first
+
+                  int slen = classname.size();
+                  for(int k=0;k<slen;++k) {
+                     if (classname[k] == ':') {
+                        if (k+1 >= slen || classname[k+1] != ':') {
+                           // we expected another ':'
+                           break;
+                        }
+                        if (k) {
+                           string base = classname.substr(0, k);
+                           if (base=="std") {
+                              // std is not declared but is also ignored by CINT!
+                              break;
+                           } else {
+                              gAutoloads[base] = ""; // We never load namespaces on their own.
+                           }
+                           ++k;
+                        }
+                     } else if (classname[k] == '<') {
+                        // We do not want to look at the namespace inside the template parameters!
+                        break;
+                     }
+                  }
+               }
+               gAutoloads[classname] = libs;
+               if (sbuffer < classname.size()+20) {
+                  delete [] buffer;
+                  sbuffer = classname.size()+20;
+                  buffer = new char[sbuffer];
+               }
+               strlcpy(buffer,classname.c_str(),sbuffer);
+            }
+            else if (line.substr(0, 10) == "namespace ") {
+            }
+         }
+         newfile.close();
+      }
    }
 }
 
@@ -2092,36 +2140,12 @@ const char *CopyArg(const char *original)
 }
 
 //______________________________________________________________________________
-void StrcpyWithEsc(string& escaped, const char *original)
-{
-   // Copy original into escaped BUT make sure that the \ characters
-   // are properly escaped (on Windows temp files have \'s).
-
-   int j = 0;
-   escaped = "";
-   while (original[j] != '\0') {
-      if (original[j] == '\\')
-         escaped += '\\';
-      escaped += original[j++];
-   }
-}
-
-//______________________________________________________________________________
 void StrcpyArg(string& dest, const char *original)
 {
    // Copy the command line argument, stripping MODULE/inc if
    // necessary.
 
    dest = CopyArg( original );
-}
-
-//______________________________________________________________________________
-void StrcpyArgWithEsc(string& escaped, const char *original)
-{
-   // Copy the command line argument, stripping MODULE/inc if
-   // necessary and then escaping string.
-
-   escaped = CopyArg( original );
 }
 
 //______________________________________________________________________________
@@ -2306,6 +2330,7 @@ void AddPlatformDefines(std::vector<std::string>& clingArgs)
    #endif
 }
 
+//______________________________________________________________________________
 void AddGccToolChainDefines (std::vector<std::string>& clingArgs) {
    #ifdef R__GCC_TOOLCHAIN
    clingArgs.push_back("-gcc-toolchain");
@@ -2371,20 +2396,21 @@ void replaceAll(std::string& str, const std::string& from, const std::string& to
 }
 
 //______________________________________________________________________________
-void extractFileName(const std::string& path, std::string& filename)
+void ExtractFileName(const std::string& path, std::string& filename)
 {
    // Extract the filename from a fullpath finding the last \ or /
    // according to the content in gPathSeparator
-   const size_t pos = path.find_last_of(gPathSeparator);
-   if(std::string::npos != pos){
-      filename.assign(path.begin() + pos + 1, path.end());
-   } else {
-      filename.assign(path);
-   }
+//    const size_t pos = path.find_last_of(gPathSeparator);
+//    if(std::string::npos != pos){
+//       filename.assign(path.begin() + pos + 1, path.end());
+//    } else {
+//       filename.assign(path);
+//    }
+   filename = llvm::sys::path::filename (path);
 }
 
 //______________________________________________________________________________
-void extractFilePath(const std::string& path, std::string& dirname)
+void ExtractFilePath(const std::string& path, std::string& dirname)
 {
    // Extract the path from a fullpath finding the last \ or /
    // according to the content in gPathSeparator
@@ -2397,26 +2423,36 @@ void extractFilePath(const std::string& path, std::string& dirname)
 }
 
 //______________________________________________________________________________
-char const *model_c[] ={
-"\n",
-"// This file has been generated by genreflex with the --capabilities option\n",
-"static  const char* clnames[] = {\n",
-"//--Final End\n",
-"};\n",
-"\n",
-"extern \"C\" void SEAL_CAPABILITIES (const char**& names, int& n )\n",
-"{\n",
-"names = clnames;\n",
-"n = sizeof(clnames)/sizeof(char*);\n",
-"}\n"};
+bool HasPath(const std::string& name)
+{
+   // Check if file has a path
+   std::string dictLocation;
+   ExtractFilePath(name,dictLocation);
+   return !dictLocation.empty();
+}
 
-std::list<std::string> model(model_c, model_c + sizeof(model_c) / sizeof(*model_c));
-
+//______________________________________________________________________________
 int createCapabilitiesFile(const std::string& capaFileName,
                            const std::string& dictFileName,
                            const std::list<std::string>& classesNames)
 {
 
+   char const *model_c[] ={
+      "\n",
+      "// This file has been generated by genreflex with the --capabilities option\n",
+      "static  const char* clnames[] = {\n",
+      "//--Final End\n",
+      "};\n",
+      "\n",
+      "extern \"C\" void SEAL_CAPABILITIES (const char**& names, int& n )\n",
+      "{\n",
+      "names = clnames;\n",
+      "n = sizeof(clnames)/sizeof(char*);\n",
+      "}\n"};
+      
+   std::list<std::string> model(model_c, model_c + sizeof(model_c) / sizeof(*model_c));
+      
+   
    // Create the capabilities file
    
    const std::string startmark("//--Begin " + dictFileName + "\n");
@@ -3058,7 +3094,7 @@ int RootCling(int argc,
 #endif
        ) {
       // There was an error.
-      ROOT::TMetaUtils::Error(0,"Error loading the default header files.");
+      ROOT::TMetaUtils::Error(0,"Error loading the default header files.\n");
       return 1;
    }
 
@@ -3270,14 +3306,14 @@ int RootCling(int argc,
 
       if (!ldefr.Parse(selectionRules, interpPragmaSource, clingArgs,
                        gResourceDir.c_str())) {
-         ROOT::TMetaUtils::Error(0,"Parsing #pragma failed %s",linkdefFilename.c_str());
+         ROOT::TMetaUtils::Error(0,"Parsing #pragma failed %s\n",linkdefFilename.c_str());
       }
       else {
          ROOT::TMetaUtils::Info(0,"#pragma successfully parsed.\n");
       }
 
       if (!ldefr.LoadIncludes(extraIncludes)) {
-         ROOT::TMetaUtils::Error(0,"Error loading the #pragma extra_include.");
+         ROOT::TMetaUtils::Error(0,"Error loading the #pragma extra_include.\n");
          return 1;
       }
    } else if (isSelXML) {
@@ -3321,19 +3357,19 @@ int RootCling(int argc,
 
       if (!ldefr.Parse(selectionRules, interpPragmaSource, clingArgs,
                        gResourceDir.c_str())) {
-         ROOT::TMetaUtils::Error(0,"Parsing Linkdef file %s",linkdefFilename.c_str());
+         ROOT::TMetaUtils::Error(0,"Parsing Linkdef file %s\n",linkdefFilename.c_str());
       }
       else {
          ROOT::TMetaUtils::Info(0,"Linkdef file successfully parsed.\n");
       }
 
       if(! ldefr.LoadIncludes(extraIncludes) ) {
-         ROOT::TMetaUtils::Error(0,"Error loading the #pragma extra_include.");
+         ROOT::TMetaUtils::Error(0,"Error loading the #pragma extra_include.\n");
          return 1;
       }
    } else {
 
-      ROOT::TMetaUtils::Error(0,"Unrecognized selection file: %s",linkdefFilename.c_str());
+      ROOT::TMetaUtils::Error(0,"Unrecognized selection file: %s\n",linkdefFilename.c_str());
 
    }
 
@@ -3672,7 +3708,8 @@ bool beginsWith(const std::string& theString, const std::string& theSubstring)
 //______________________________________________________________________________
 bool isHeaderName(const std::string& filename)
 {
-   return endsWith(filename,".h") || endsWith(filename,".hpp");
+   return llvm::sys::path::extension(filename) ==".h" ||
+          llvm::sys::path::extension(filename) == ".hpp";
 }
 
 //______________________________________________________________________________
@@ -3838,6 +3875,10 @@ int invokeRootCling(const std::string& verbosity,
    argvVector.push_back(string2charptr("-f"));
    argvVector.push_back(string2charptr(ofilename));
 
+   // Extract the path to the dictionary
+   std::string dictLocation;
+   ExtractFilePath(ofilename,dictLocation);
+   
    // Rootmaps
 
    // Prepare the correct rootmap libname if not already set.
@@ -3848,7 +3889,7 @@ int invokeRootCling(const std::string& verbosity,
             "*** genreflex: No rootmap lib and several header specified!\n");
       }
       std::string cleanHeaderName;
-      extractFileName(headersNames[0],cleanHeaderName);
+      ExtractFileName(headersNames[0],cleanHeaderName);
       newRootmapLibName = "lib";
       newRootmapLibName+=cleanHeaderName;
       changeExtension(newRootmapLibName,gLibraryExtension);
@@ -3856,14 +3897,9 @@ int invokeRootCling(const std::string& verbosity,
 
    // Prepend to the rootmap the designed directory of the dictionary
    // if no path is specified for the rootmap itself
-   std::string dictLocation("");
    std::string newRootmapFileName(rootmapFileName);
-   if (!newRootmapFileName.empty()){
-      extractFilePath(newRootmapFileName,dictLocation);
-      if (dictLocation.empty()){ //Add it. In the worst case it's ./
-         extractFilePath(ofilename,dictLocation);
-         newRootmapFileName = dictLocation+newRootmapFileName;
-      }
+   if (!newRootmapFileName.empty() && !HasPath(newRootmapFileName)){
+      newRootmapFileName = dictLocation+newRootmapFileName;
    }
 
    
@@ -3879,10 +3915,14 @@ int invokeRootCling(const std::string& verbosity,
       argvVector.push_back(string2charptr(newRootmapLibName));
    }
 
-   // Capabilities file
+   // Capabilities file   
    if (!capaFileName.empty()){
+      std::string newCapaFileName(capaFileName);
+      if (!HasPath(newCapaFileName)){
+         newCapaFileName=dictLocation+newCapaFileName;
+      }
       argvVector.push_back(string2charptr("-cap"));
-      argvVector.push_back(string2charptr(capaFileName));
+      argvVector.push_back(string2charptr(newCapaFileName));
    }   
    
    if (!targetLibName.empty()){
@@ -4407,7 +4447,7 @@ int main(int argc, char **argv)
    const std::string exePath ( GetExePath() );
 
    std::string exeName;
-   extractFileName(exePath,exeName);
+   ExtractFileName(exePath,exeName);
 
    // Select according to the name of the executable the procedure to follow:
    // 1) RootCling

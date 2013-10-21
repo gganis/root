@@ -93,7 +93,7 @@ private: // Data Members
    TEnv*           fMapfile;          // Association of classes to libraries.
    THashTable*     fMapNamespaces;    // Entries for the namespaces, that we need to signal to clang.
    TObjArray*      fRootmapFiles;     // Loaded rootmap files.
-   Bool_t          fLockProcessLine;  // True if ProcessLine should lock gClingMutex.
+   Bool_t          fLockProcessLine;  // True if ProcessLine should lock gInterpreterMutex.
 
    cling::Interpreter*   fInterpreter;   // The interpreter.
    cling::MetaProcessor* fMetaProcessor; // The metaprocessor.
@@ -264,6 +264,7 @@ public: // Public Interface
    virtual void   CallFunc_IgnoreExtraArgs(CallFunc_t* func, bool ignore) const;
    virtual void   CallFunc_Init(CallFunc_t* func) const;
    virtual bool   CallFunc_IsValid(CallFunc_t* func) const;
+   virtual CallFuncIFacePtr_t CallFunc_IFacePtr(CallFunc_t * func) const;
    virtual void   CallFunc_ResetArg(CallFunc_t* func) const;
    virtual void   CallFunc_SetArg(CallFunc_t* func, Long_t param) const;
    virtual void   CallFunc_SetArg(CallFunc_t* func, Double_t param) const;
@@ -288,6 +289,7 @@ public: // Public Interface
    virtual ClassInfo_t*  ClassInfo_Factory() const;
    virtual ClassInfo_t*  ClassInfo_Factory(ClassInfo_t* cl) const;
    virtual ClassInfo_t*  ClassInfo_Factory(const char* name) const;
+   virtual Long_t   ClassInfo_GetBaseOffset(ClassInfo_t* derived, ClassInfo_t* target, void * address) const;
    virtual int    ClassInfo_GetMethodNArg(ClassInfo_t* info, const char* method, const char* proto, Bool_t objectIsConst = false, ROOT::EFunctionMatchMode mode = ROOT::kConversionMatch) const;
    virtual bool   ClassInfo_HasDefaultConstructor(ClassInfo_t* info) const;
    virtual bool   ClassInfo_HasMethod(ClassInfo_t* info, const char* name) const;
@@ -316,9 +318,11 @@ public: // Public Interface
    // BaseClassInfo interface
    virtual void   BaseClassInfo_Delete(BaseClassInfo_t* bcinfo) const;
    virtual BaseClassInfo_t*  BaseClassInfo_Factory(ClassInfo_t* info) const;
+   virtual BaseClassInfo_t*  BaseClassInfo_Factory(ClassInfo_t* derived,
+                                                   ClassInfo_t* base) const;
    virtual int    BaseClassInfo_Next(BaseClassInfo_t* bcinfo) const;
    virtual int    BaseClassInfo_Next(BaseClassInfo_t* bcinfo, int onlyDirect) const;
-   virtual Long_t BaseClassInfo_Offset(BaseClassInfo_t* bcinfo) const;
+   virtual Long_t BaseClassInfo_Offset(BaseClassInfo_t* bcinfo, void * address) const;
    virtual Long_t BaseClassInfo_Property(BaseClassInfo_t* bcinfo) const;
    virtual Long_t BaseClassInfo_Tagnum(BaseClassInfo_t* bcinfo) const;
    virtual const char* BaseClassInfo_FullName(BaseClassInfo_t* bcinfo) const;
@@ -428,8 +432,8 @@ private: // Private Utility Functions
    void HandleEnumDecl(const clang::Decl* D, bool isGlobal, TClass *cl = 0) const;
    void GetMissingDictionariesForDecl(const clang::Decl* D, std::set<std::string> &netD, clang::QualType qType, bool recurse);
    bool InsertMissingDictionaryDecl(const clang::Decl* D, std::set<std::string> &netD, clang::QualType qType, bool recurse);
-
-   ClassDef(TCling, 0) //Interface to cling C++ interpreter
+   void InitRootmapFile(const char *name);
+   int  ReadRootmapFile(const char *rootmapfile);
 };
 
 #endif

@@ -11,6 +11,7 @@
 #include "clang/Basic/SourceManager.h"
 
 #include "llvm/ADT/SmallString.h"
+#include "llvm/IR/Module.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
@@ -18,12 +19,14 @@
 
 #include <cstdio>
 #include <string>
+#include <time.h>
 
 using namespace clang;
 
 namespace cling {
-  ClangInternalState::ClangInternalState(ASTContext& C, const std::string& name)
-    : m_ASTContext(C), m_DiffCommand("diff -u "), m_Name(name) {
+  ClangInternalState::ClangInternalState(ASTContext& C, llvm::Module& M, 
+                                         const std::string& name)
+    : m_ASTContext(C), m_Module(M), m_DiffCommand("diff -u "), m_Name(name) {
     store();
   }
 
@@ -32,17 +35,33 @@ namespace cling {
     remove(m_LookupTablesFile.c_str());
     remove(m_IncludedFilesFile.c_str());
     remove(m_ASTFile.c_str());
+    remove(m_LLVMModuleFile.c_str());
   }
 
   void ClangInternalState::store() {
     m_LookupTablesOS.reset(createOutputFile("lookup", &m_LookupTablesFile));
     m_IncludedFilesOS.reset(createOutputFile("included", &m_IncludedFilesFile));
     m_ASTOS.reset(createOutputFile("ast", &m_ASTFile));
+    m_LLVMModuleOS.reset(createOutputFile("module", &m_LLVMModuleFile));
     
     printLookupTables(*m_LookupTablesOS.get(), m_ASTContext);
     printIncludedFiles(*m_IncludedFilesOS.get(), 
                        m_ASTContext.getSourceManager());
     printAST(*m_ASTOS.get(), m_ASTContext);
+    printLLVMModule(*m_LLVMModuleOS.get(), m_Module);
+  }
+  namespace {
+    std::string getCurrentTimeAsString() {
+      time_t rawtime;
+      struct tm * timeinfo;
+      char buffer [80];
+
+      time (&rawtime);
+      timeinfo = localtime (&rawtime);
+
+      strftime (buffer, 80, "%I_%M_%S", timeinfo);
+      return buffer;
+    }
   }
 
   // Copied with modifications from CompilerInstance.cpp
@@ -62,6 +81,8 @@ namespace cling {
     llvm::sys::fs::make_absolute(TempPath);
     assert(llvm::sys::fs::is_directory(TempPath.str()) && "Must be a folder.");
     // Create a temporary file.
+    llvm::sys::path::append(TempPath, OutFile);
+    TempPath += "-" + getCurrentTimeAsString();
     TempPath += "-%%%%%%%%";
     int fd;
     if (llvm::sys::fs::createUniqueFile(TempPath.str(), fd, TempPath)
@@ -98,6 +119,12 @@ namespace cling {
 
     if (differentContent(m_ASTFile, other.m_ASTFile, differences)) {
       llvm::errs() << "Differences in the AST \n";
+      llvm::errs() << differences << "\n";
+      differences = "";
+    }
+
+    if (differentContent(m_LLVMModuleFile, other.m_LLVMModuleFile, differences)){
+      llvm::errs() << "Differences in the llvm Module \n";
       llvm::errs() << differences << "\n";
       differences = "";
     }
@@ -144,6 +171,12 @@ namespace cling {
            E = SM.fileinfo_end(); I != E; ++I) {
       const clang::SrcMgr::ContentCache &C = *I->second;
       const clang::FileEntry *FE = C.OrigEntry;
+      // Our error recovery purges the cache of the FileEntry, but keeps
+      // the FileEntry's pointer so that if it was used by smb (like the
+      // SourceManager) it wouldn't be dangling. In that case we shouldn't
+      // print the FileName, because semantically it is not there.
+      if (!FE->getSize() && !FE->getModificationTime())
+        continue;
       std::string fileName(FE->getName());
       if (!(fileName.compare(0, 5, "/usr/") == 0 &&
             fileName.find("/bits/") != std::string::npos)) {
@@ -160,5 +193,10 @@ namespace cling {
     clang::PrintingPolicy policy = C.getPrintingPolicy();
     TU->print(Out, policy, Indentation, PrintInstantiation);
     Out.flush();
+  }
+
+  void ClangInternalState::printLLVMModule(llvm::raw_ostream& Out, 
+                                           llvm::Module& M) {
+    M.print(Out, /*AssemblyAnnotationWriter*/ 0);
   }
 } // end namespace cling

@@ -1,4 +1,4 @@
-// RUN: cat %s | %cling -Xclang -verify 2>&1 | FileCheck %s
+// RUN: cat %s | %cling -I%p -Xclang -verify 2>&1 | FileCheck %s
 
 // Test the removal of decls which are stored in vector of redeclarables 
 .rawInput 1
@@ -13,7 +13,7 @@ namespace test { int y = 0; }
 .storeState "testSubsequentDecls"
 #include "SubsequentDecls.h"
 .compareState "testSubsequentDecls"
-// CHECK-NOT: File with AST differencies stored in: testSubsequentDeclsAST.diff
+// CHECK-NOT: Differences
 
 .rawInput 1
 template<> int TemplatedF(int i) { return i + 100; }
