@@ -602,10 +602,13 @@ TROOT::~TROOT()
       SafeDelete(fClosedObjects);
 
       fFunctions->Delete();  SafeDelete(fFunctions);   // etc..
-      fColors->Delete();     SafeDelete(fColors);
-      fStyles->Delete();     SafeDelete(fStyles);
       fGeometries->Delete(); SafeDelete(fGeometries);
       fBrowsers->Delete();   SafeDelete(fBrowsers);
+#ifdef R__COMPLETE_MEM_TERMINATION
+      SafeDelete(fCanvases);
+#endif
+      fColors->Delete();     SafeDelete(fColors);
+      fStyles->Delete();     SafeDelete(fStyles);
 
 #ifdef R__COMPLETE_MEM_TERMINATION
       if (gGuiFactory != gBatchGuiFactory) SafeDelete(gGuiFactory);
@@ -835,15 +838,30 @@ void TROOT::CloseFiles()
       R__ListSlowClose(static_cast<TList*>(fMappedFiles));
    }
 
+}
+
+//______________________________________________________________________________
+void TROOT::EndOfProcessCleanups()
+{
+   // Execute the cleanups necessary at the end of the process, in particular
+   // those that must be executed before the library start being unloaded.
+
+   CloseFiles();
+   
+   if (gInterpreter) {
+      gInterpreter->ResetGlobals();
+   }
+
    // Now a set of simpler things to delete.  See the same ordering in
    // TROOT::~TROOT
    fFunctions->Delete();
-   fColors->Delete();
-   fStyles->Delete();
    fGeometries->Delete();
    fBrowsers->Delete();
    fCanvases->Delete();
+   fColors->Delete();
+   fStyles->Delete();
 }
+
 
 //______________________________________________________________________________
 TObject *TROOT::FindObject(const TObject *) const
