@@ -53,6 +53,8 @@ class TProcessUUID;
 class TClassGenerator;
 class TVirtualMutex;
 class TROOT;
+class TListOfFunctions;
+class TFunctionTemplate;
 
 
 
@@ -108,8 +110,9 @@ protected:
    TVirtualPad     *fSelectPad;           //Currently selected pad
    TCollection     *fClasses;             //List of classes definition
    TCollection     *fTypes;               //List of data types definition
+   TCollection     *fFuncTemplate;        //List of global function templates
    TCollection     *fGlobals;             //List of global variables
-   TCollection     *fGlobalFunctions;     //List of global functions
+   TListOfFunctions*fGlobalFunctions;     //List of global functions
    TSeqCollection  *fClosedObjects;       //List of closed objects from the list of files and sockets, so we can delete them if neededCl. 
    TSeqCollection  *fFiles;               //List of files
    TSeqCollection  *fMappedFiles;         //List of memory mapped files
@@ -147,6 +150,8 @@ protected:
    void          *operator new(size_t l, void *ptr) { return TObject::operator new(l,ptr); }
 
    friend class ::ROOT::TROOTAllocator;
+
+   TListOfFunctions*GetGlobalFunctions();
 
 public:
                      TROOT(const char *name, const char *title, VoidFuncPtr_t *initfunc = 0);
@@ -219,6 +224,7 @@ public:
    TDataType        *GetType(const char *name, Bool_t load = kFALSE) const;
    TFile            *GetFile() const { if (gDirectory != this) return gDirectory->GetFile(); else return 0;}
    TFile            *GetFile(const char *name) const;
+   TFunctionTemplate*GetFunctionTemplate(const char *name);
    TStyle           *GetStyle(const char *name) const;
    TObject          *GetFunction(const char *name) const;
    TGlobal          *GetGlobal(const char *name, Bool_t load = kFALSE) const;

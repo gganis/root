@@ -121,7 +121,6 @@ PyObject* PyROOT::TULongExecutor::Execute( CallFunc_t* func, void* self, Bool_t 
 PyObject* PyROOT::TLongLongExecutor::Execute( CallFunc_t* func, void* self, Bool_t release_gil )
 {
 // execute <func> with argument <self>, construct python long long return value
-// (CLING) TODO: this was returning a G__value
    Long64_t result;
    if ( release_gil ) {
       Py_BEGIN_ALLOW_THREADS
@@ -137,7 +136,6 @@ PyObject* PyROOT::TLongLongExecutor::Execute( CallFunc_t* func, void* self, Bool
 PyObject* PyROOT::TULongLongExecutor::Execute( CallFunc_t* func, void* self, Bool_t release_gil )
 {
 // execute <func> with argument <self>, construct python unsigned long long return value
-// (CLING) TODO: this was returning a G__value
    ULong64_t result;
    if ( release_gil ) {
       Py_BEGIN_ALLOW_THREADS
@@ -280,7 +278,7 @@ PyObject* PyROOT::TSTLStringExecutor::Execute( CallFunc_t* func, void* self, Boo
       PyROOT_PyUnicode_FromStringAndSize( result->c_str(), result->size() );
    delete value;
 
-// TODO: does the suffice?? See also TRootObjectByValueExecutor
+// last time I checked, this was a no-op, but by convention it is required
    gInterpreter->ClearStack();
 
    return pyresult;
@@ -304,20 +302,13 @@ PyObject* PyROOT::TRootObjectExecutor::Execute( CallFunc_t* func, void* self, Bo
 PyObject* PyROOT::TRootObjectByValueExecutor::Execute( CallFunc_t* func, void* self, Bool_t release_gil )
 {
 // execution will bring a temporary in existence
-   void* result = malloc( fClass->Size() );
+   TInterpreterValue *value = gInterpreter->CreateTemporary();
+   PRCallFuncExecValue( func, self, *value, release_gil );
 
-// CLING WORKAROUND (ROOT-5202): it's not clear when an object is returned as
-// struct, and when as a builtin value; for 64b, the cut-off appears to be 16 bytes
-   if ( fClass->Size() <= 16 ) {   // return by value
-      std::memcpy( result, (void*)PRCallFuncExecInt( func, self, release_gil ), 16 );
-   } else {
-// -- CLING WORKAROUND
-      TInterpreterValue *value = gInterpreter->CreateTemporary();
-      PRCallFuncExecValue( func, self, *value, release_gil );
-   // TODO: there's no guarantee that bit-wise copy is correct ...
-      std::memcpy( result, value->GetAsPointer(), fClass->Size() );
-      delete value;
-   }
+// TODO: there's no guarantee that bit-wise copy is correct ...
+   void* result = malloc( fClass->Size() );
+   std::memcpy( result, value->GetAsPointer(), fClass->Size() );
+   delete value;
 
    if ( ! result ) {
       if ( ! PyErr_Occurred() )         // callee may have set a python error itself
@@ -325,9 +316,8 @@ PyObject* PyROOT::TRootObjectByValueExecutor::Execute( CallFunc_t* func, void* s
       return 0;
    }
 
-// TODO: there's no guarantee that we're the only user of temp objects; this as well as
-// the bitwise-copy issue means that it'd be better if the ownership could be transferred
-   gInterpreter->ClearStack();     // currently a no-op for Cling (?)
+// last time I checked, this was a no-op, but by convention it is required
+   gInterpreter->ClearStack();
 
 // the result can then be bound
    ObjectProxy* pyobj = (ObjectProxy*)BindRootObjectNoCast( result, fClass );
@@ -352,9 +342,9 @@ PyObject* PyROOT::TRootObjectRefExecutor::Execute( CallFunc_t* func, void* self,
       if ( ! assign ) {
          PyErr_Clear();
          PyObject* descr = PyObject_Str( result );
-         if ( descr && PyString_CheckExact( descr ) ) {
+         if ( descr && PyBytes_CheckExact( descr ) ) {
             PyErr_Format( PyExc_TypeError, "can not assign to return object (%s)",
-                          PyString_AS_STRING( descr ) );
+                          PyBytes_AS_STRING( descr ) );
          } else {
             PyErr_SetString( PyExc_TypeError, "can not assign to result" );
          }
@@ -419,7 +409,7 @@ PyROOT::TExecutor* PyROOT::CreateExecutor( const std::string& fullType )
       return (h->second)();
 
 // resolve typedefs etc., and collect qualifiers
-   std::string resolvedType = TClassEdit::ResolveTypedef( fullType.c_str(), true );
+   std::string resolvedType = Utility::ResolveTypedef( fullType );
 
 // a full, qualified matching executor is preferred
    h = gExecFactories.find( resolvedType );
@@ -518,6 +508,7 @@ namespace {
    NFp_t factories_[] = {
    // factories for built-ins
       NFp_t( "char",               &CreateCharExecutor                ),
+      NFp_t( "signed char",        &CreateCharExecutor                ),
       NFp_t( "unsigned char",      &CreateCharExecutor                ),
       NFp_t( "short",              &CreateIntExecutor                 ),
       NFp_t( "short&",             &CreateShortRefExecutor            ),

@@ -224,7 +224,11 @@ void TClassEdit::TSplitType::ShortType(std::string &answ, int mode)
       bool hasconst = 0==strncmp("const ",fElements[i].c_str(),6);
       //NOTE: Should we also check the end of the type for 'const'?
       fElements[i] = TClassEdit::ShortType(fElements[i].c_str(),mode);
-      if (hasconst) {
+      if (hasconst && !(mode & TClassEdit::kKeepOuterConst)) {
+         // if mode is set to keep the outer const, it will be kept
+         // and we do not need to put it back ... 
+         // FIXME: why are passing a flag meant for the outer
+         // to the handling of the inner?
          fElements[i] = "const " + fElements[i];
       }
    }
@@ -323,6 +327,19 @@ bool TClassEdit::IsDefAlloc(const char *allocname, const char *classname)
    return false;
 }
 
+namespace {
+   static void ReplaceAll(std::string& str, const std::string& from, const std::string& to)
+   {
+      if(from.empty())
+         return;
+      size_t start_pos = 0;
+      while((start_pos = str.find(from, start_pos)) != std::string::npos) {
+         str.replace(start_pos, from.length(), to);
+         start_pos += to.length();
+      }
+   }
+}
+
 //______________________________________________________________________________
 bool TClassEdit::IsDefAlloc(const char *allocname,
                             const char *keyclassname,
@@ -335,11 +352,12 @@ bool TClassEdit::IsDefAlloc(const char *allocname,
 
 
    string a = allocname;
-   if (strncmp(a.c_str(),"std::",5)==0) {
-      a.erase(0,5);
-   }
    string k = keyclassname;
    string v = valueclassname;
+
+   ReplaceAll(a,"std::","");
+   ReplaceAll(k,"std::","");
+   ReplaceAll(v,"std::","");
 
    string stem("allocator<pair<");
    stem += k;
@@ -836,6 +854,9 @@ string TClassEdit::ResolveTypedef(const char *tname, bool resolveAll)
                      tname += 5;
                      break;
                   } else {
+                     if (base.compare(0,6,"const ") == 0) {
+                        base.erase(0,6);
+                     }
                      if (gInterpreterHelper &&
                          !gInterpreterHelper->IsDeclaredScope(base)) {
                         // the nesting namespace is not declared

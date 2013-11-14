@@ -38,6 +38,12 @@
 #include <algorithm>
 #include <vector>
 
+//- FOR CLING WORKAROUND
+#include "TError.h"
+//
+
+#include <iostream>
+
 
 //- data _______________________________________________________________________
 R__EXTERN PyObject* gRootModule;
@@ -116,10 +122,6 @@ namespace {
    }
 
    std::set< std::string > gSTLTypes, gSTLExceptions;
-// CLING WORKAROUND
-   std::map< std::string, std::string > gKnownSTDGlobals;
-// END CLING WORKAROUND
-
    struct InitSTLTypes_t {
       InitSTLTypes_t()
       {
@@ -141,14 +143,6 @@ namespace {
             gSTLExceptions.insert( stlExceptions[ i ] );
             gSTLExceptions.insert( nss + stlExceptions[ i ] );
          }
-
-// CLING WORKAROUND: these should be known and findable as globals, but they're not
-         gKnownSTDGlobals[ "cin"  ] = "std::istream";
-         gKnownSTDGlobals[ "cout" ] = "std::ostream";
-         gKnownSTDGlobals[ "cerr" ] = "std::ostream";
-         gKnownSTDGlobals[ "clog" ] = "std::ostream";
-// END CLING WORKAROUND
-
       }
    } initSTLTypes_;
 
@@ -282,7 +276,8 @@ int PyROOT::BuildRootClassDict( const TScopeAdapter& klass, PyObject* pyclass ) 
             Py_DECREF( pytmpl );
          }
          Py_XDECREF( attr );
-      // note: need to continue here to actually add the method ...
+      // continue processing to actually add the method so that the proxy can find
+      // it on the class when called
       }
 
    // public methods are normally visible, private methods are mangled python-wise
@@ -330,18 +325,19 @@ int PyROOT::BuildRootClassDict( const TScopeAdapter& klass, PyObject* pyclass ) 
    // one (to be picked up by the templated one as appropriate) if a template exists
       PyObject* attr = PyObject_GetAttrString( pyclass, const_cast< char* >( imd->first.c_str() ) );
       MethodProxy* method = 0;
-      if ( ! TemplateProxy_Check( attr ) ) {
-      // normal case: no template
-         PyErr_Clear();
-         method = MethodProxy_New( imd->first, imd->second );
+      if ( TemplateProxy_Check( attr ) ) {
+      // template exists, supply it with the non-templated methods
+         for ( Callables_t::iterator cit = imd->second.begin(); cit != imd->second.end(); ++cit )
+            ((TemplateProxy*)attr)->AddMethod( *cit );
       } else {
-      // template exists, supply it with the generic edition
-         Py_XDECREF( attr );
-         method = MethodProxy_New( "__generic_" + imd->first, imd->second );
+      // normal case, add a new method
+         method = MethodProxy_New( imd->first, imd->second );
+         PyObject_SetAttrString(
+            pyclass, const_cast< char* >( method->GetName().c_str() ), (PyObject*)method );
+         Py_DECREF( method );
       }
-      PyObject_SetAttrString(
-         pyclass, const_cast< char* >( method->GetName().c_str() ), (PyObject*)method );
-      Py_DECREF( method );
+
+      Py_XDECREF( attr );     // could have be found in base class or non-existent
    }
 
 // collect data members
@@ -460,8 +456,7 @@ PyObject* PyROOT::MakeRootClassFromType( TClass* klass )
 }
 
 //____________________________________________________________________________
-PyObject* PyROOT::MakeRootClassFromString(
-    const std::string& fullname, PyObject* scope, Bool_t searchGlobal )
+PyObject* PyROOT::MakeRootClassFromString( const std::string& fullname, PyObject* scope )
 {
 // force building of the class if a scope is specified (prevents loops)
    Bool_t force = scope != 0;
@@ -488,7 +483,7 @@ PyObject* PyROOT::MakeRootClassFromString(
       Py_INCREF( scope );
    }
 
-// retrieve ROOT class (this verifies name)
+// retrieve ROOT class (this verifies name, and is therefore done first)
    const std::string& lookup = scope ? (scName+"::"+name) : name;
    TScopeAdapter klass = TScopeAdapter::ByName( lookup );
    if ( ! (Bool_t)klass || klass.FunctionMemberSize() == 0 ) {
@@ -515,7 +510,7 @@ PyObject* PyROOT::MakeRootClassFromString(
    }
 
    if ( ! (Bool_t)klass ) {   // if so, all options have been exhausted: it doesn't exist as such
-      if ( ! scope && searchGlobal && fullname.find( "ROOT::" ) == std::string::npos ) { // not already in ROOT::
+      if ( ! scope && fullname.find( "ROOT::" ) == std::string::npos ) { // not already in ROOT::
       // final attempt, for convenience, the "ROOT" namespace isn't required, try again ...
          PyObject* rtns = PyObject_GetAttr( gRootModule, PyStrings::gROOTns );
          PyObject* pyclass = PyObject_GetAttrString( rtns, (char*)fullname.c_str() );
@@ -699,17 +694,12 @@ PyObject* PyROOT::GetRootGlobalFromString( const std::string& name )
    if ( ! overloads.empty() )
       return (PyObject*)MethodProxy_New( name, overloads );
 
-// CLING WORKAROUND
-   std::map< std::string, std::string >::iterator iglb = gKnownSTDGlobals.find( name );
-   if ( iglb != gKnownSTDGlobals.end() ) {
-      std::string clName = Utility::ResolveTypedef( iglb->second );
-      TClass* klass = TClass::GetClass( clName.c_str() );
-      PyObject* pyclass = MakeRootClassFromType( klass );
-      Py_XDECREF( pyclass );
-      return BindRootObjectNoCast(
-         (void*)gROOT->ProcessLine( ("&" + name + ";").c_str() ), klass );
+// allow lookup into std as if global (historic)
+   TDataMember* dm = TClass::GetClass( "std" )->GetDataMember( name.c_str() );
+   if ( dm ) {
+      TClass* klass = TClass::GetClass( dm->GetFullTypeName() );
+      return BindRootObjectNoCast( (void*)dm->GetOffset(), klass, kFALSE );
    }
-// END CLING WORKAROUND
 
 // nothing found
    PyErr_Format( PyExc_LookupError, "no such global: %s", name.c_str() );
@@ -763,7 +753,12 @@ PyObject* PyROOT::BindRootObject( void* address, TClass* klass, Bool_t isRef )
    }
 
 // get actual class for recycling checking and/or downcasting
+// CLING WORKAROUND -- silence:
+// Error in <TStreamerInfo::Build>: __gnu_cxx::__normal_iterator<int*,vector<int> >, discarding: int* _M_current, no [dimension]
+   Int_t oldval = gErrorIgnoreLevel;
+   gErrorIgnoreLevel = 5000;
    TClass* clActual = isRef ? 0 : klass->GetActualClass( address );
+   gErrorIgnoreLevel = oldval;
 
 // obtain pointer to TObject base class (if possible) for memory mgmt; this is
 // done before downcasting, as upcasting from the current class may be easier and
@@ -772,7 +767,8 @@ PyObject* PyROOT::BindRootObject( void* address, TClass* klass, Bool_t isRef )
    TObject* object = 0;
    if ( ! isRef && klass->IsTObject() ) {
       object = (TObject*)((Long_t)address +
-         Utility::GetObjectOffset( klass->GetName(), TObject::Class()->GetClassInfo(), address ) );
+         Utility::GetObjectOffset(
+            klass->GetClassInfo(), TObject::Class()->GetClassInfo(), address ) );
 
    // use the old reference if the object already exists
       PyObject* oldPyObject = TMemoryRegulator::RetrieveObject( object, clActual ? clActual : klass );
@@ -783,7 +779,7 @@ PyObject* PyROOT::BindRootObject( void* address, TClass* klass, Bool_t isRef )
 // upgrade to real class for object returns
    if ( clActual && klass != clActual ) {
       address = (void*)((Long_t)address +
-         Utility::GetObjectOffset( klass->GetName(), clActual->GetClassInfo(), address ) );
+         Utility::GetObjectOffset( klass->GetClassInfo(), clActual->GetClassInfo(), address ) );
       klass = clActual;
    }
 

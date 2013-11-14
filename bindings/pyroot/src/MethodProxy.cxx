@@ -21,9 +21,7 @@
 
 // Standard
 #include <algorithm>
-#include <functional>
 #include <vector>
-#include <algorithm>
 
 
 namespace PyROOT {
@@ -208,87 +206,74 @@ namespace {
 //____________________________________________________________________________
    PyObject* mp_func_code( MethodProxy* pymeth, void* )
    {
-   // Stub only, to fill out the python function interface.
+   // Code details are used in module inspect to fill out interactive help()
 #if PY_VERSION_HEX < 0x03000000
-      MethodProxy::Methods_t& methods = pymeth->fMethodInfo->fMethods; 	 
-	  	 
-   // collect maximum number of arguments in set of overloads; this is also used 	 
-   // for the number of locals ("stack variables") 	 
-      int co_argcount = 0; 	 
-      MethodProxy::Methods_t::iterator maxargmeth; 	 
-      for ( MethodProxy::Methods_t::iterator imeth = methods.begin();
-            imeth != methods.end(); ++imeth ) { 	 
-         if ( co_argcount < (*imeth)->GetMaxArgs() ) { 	 
-            co_argcount = (*imeth)->GetMaxArgs(); 	 
-            maxargmeth = imeth; 	 
-         } 	 
-      } 	 
-      co_argcount += 1;       // for 'self' 	 
+      MethodProxy::Methods_t& methods = pymeth->fMethodInfo->fMethods;
+
+   // collect arguments only if there is just 1 overload, otherwise put in a
+   // fake *args (see below for co_varnames)
+      int co_argcount = (methods.size() == 1 ? methods[0]->GetMaxArgs() : 1) + 1 /* for 'self' */;
+
+   // TODO: static methods need no 'self' (but is harmless otherwise)
 	  	 
    // for now, code object representing the statement 'pass' 	 
       PyObject* co_code = PyString_FromStringAndSize( "d\x00\x00S", 4 ); 	 
-	  	 
-   // tuple with all the const literals used in the function 	 
-      PyObject* co_consts = PyTuple_New( 2 ); 	 
-      Py_INCREF( Py_None ); 	 
-      PyTuple_SET_ITEM( co_consts, 0, Py_None ); 	 
-      PyObject* val1 = PyFloat_FromDouble( -1.0 ); 	 
-      PyTuple_SET_ITEM( co_consts, 1, val1 ); 	 
-	  	 
-      PyObject* co_names = PyTuple_New( 2 ); 	 
-      PyTuple_SET_ITEM( co_names, 0, PyString_FromString( "dafunc" ) ); 	 
-      PyTuple_SET_ITEM( co_names, 1, PyString_FromString( "acos" ) ); 	 
-	  	 
-   // names, freevars, and cellvars go unused 	 
-      PyObject* co_unused = PyTuple_New( 0 ); 	 
-	  	 
-   // variable names are both the argument and local names 	 
-      PyObject* co_varnames = PyTuple_New( co_argcount + 1 ); 	 
-      PyTuple_SET_ITEM( co_varnames, 0, PyString_FromString( "self" ) ); 	 
-      for ( int iarg = 1; iarg < co_argcount; ++iarg ) { 	 
-         PyTuple_SET_ITEM( co_varnames, iarg, (*maxargmeth)->GetArgSpec( iarg - 1 ) ); 	 
-      } 	 
-      PyTuple_SET_ITEM( co_varnames, co_argcount, PyString_FromString( "d" ) ); 	 
-	  	 
+
+   // tuples with all the const literals used in the function
+      PyObject* co_consts = PyTuple_New( 0 );
+      PyObject* co_names = PyTuple_New( 0 );
+
+   // names, freevars, and cellvars go unused
+      PyObject* co_unused = PyTuple_New( 0 );
+
+   // variable names are both the argument and local names
+      PyObject* co_varnames = PyTuple_New( co_argcount );
+      PyTuple_SET_ITEM( co_varnames, 0, PyString_FromString( "self" ) );
+      if ( methods.size() == 1 ) {
+         for ( int iarg = 1; iarg < co_argcount; ++iarg )
+            PyTuple_SET_ITEM( co_varnames, iarg, methods[0]->GetArgSpec( iarg - 1 ) );
+      } else
+         PyTuple_SET_ITEM( co_varnames, 1, PyString_FromString( "*args" ) );
+
    // filename is made-up 	 
-      PyObject* co_filename = PyString_FromString( "ROOT.py" ); 	 
-	  	 
-   // name is the function name, also through __name__ on the function itself 	 
-      PyObject* co_name = PyString_FromString( pymeth->GetName().c_str() ); 	 
-	  	 
-   // firstlineno is the line number of first function code in the containing scope 	 
-	  	 
-   // lnotab is a packed table that maps instruction count and line number 	 
-      PyObject* co_lnotab = PyString_FromString( "\x00\x01\x0c\x01" ); 	 
-	  	 
-      PyObject* code = (PyObject*)PyCode_New( 	 
-         co_argcount,                             // argcount 	 
-         co_argcount + 1,                         // nlocals 	 
-         2,                                       // stacksize 	 
-         CO_OPTIMIZED | CO_NEWLOCALS | CO_NOFREE, // flags 	 
-         co_code,                                 // code 	 
-         co_consts,                               // consts 	 
-         co_names,                                // names 	 
-         co_varnames,                             // varnames 	 
-         co_unused,                               // freevars 	 
-         co_unused,                               // cellvars 	 
-         co_filename,                             // filename 	 
-         co_name,                                 // name 	 
-         1,                                       // firstlineno 	 
-         co_lnotab );                             // lnotab 	 
-	  	 
-      Py_DECREF( co_lnotab ); 	 
-      Py_DECREF( co_name ); 	 
-      Py_DECREF( co_unused ); 	 
-      Py_DECREF( co_filename ); 	 
-      Py_DECREF( co_varnames ); 	 
-      Py_DECREF( co_names ); 	 
-      Py_DECREF( co_consts ); 	 
-      Py_DECREF( co_code ); 	 
-	  	 
-      return code; 	 
+      PyObject* co_filename = PyString_FromString( "ROOT.py" );
+
+   // name is the function name, also through __name__ on the function itself
+      PyObject* co_name = PyString_FromString( pymeth->GetName().c_str() );
+
+   // firstlineno is the line number of first function code in the containing scope
+
+   // lnotab is a packed table that maps instruction count and line number
+      PyObject* co_lnotab = PyString_FromString( "\x00\x01\x0c\x01" );
+
+      PyObject* code = (PyObject*)PyCode_New(
+         co_argcount,                             // argcount
+         co_argcount + 1,                         // nlocals
+         2,                                       // stacksize
+         CO_OPTIMIZED | CO_NEWLOCALS | CO_NOFREE, // flags
+         co_code,                                 // code
+         co_consts,                               // consts
+         co_names,                                // names
+         co_varnames,                             // varnames
+         co_unused,                               // freevars
+         co_unused,                               // cellvars
+         co_filename,                             // filename
+         co_name,                                 // name
+         1,                                       // firstlineno
+         co_lnotab );                             // lnotab
+
+      Py_DECREF( co_lnotab );
+      Py_DECREF( co_name );
+      Py_DECREF( co_unused );
+      Py_DECREF( co_filename );
+      Py_DECREF( co_varnames );
+      Py_DECREF( co_names );
+      Py_DECREF( co_consts );
+      Py_DECREF( co_code );
+
+      return code;
 #else 	 
-// not important for functioning of most code, so not implemented for p3 for now (TODO) 	 
+// not important for functioning of most code, so not implemented for p3 for now (TODO)
       pymeth = 0;
       if ( pymeth || !pymeth) Py_INCREF( Py_None );
       return Py_None;
@@ -298,23 +283,20 @@ namespace {
 //____________________________________________________________________________
    PyObject* mp_func_defaults( MethodProxy* pymeth, void* )
    {
-   // Create a tuple of default values for the overload with the most arguments.
+   // Create a tuple of default values, if there is only one method (otherwise
+   // leave undefined: this is only used by inspect for interactive help())
       MethodProxy::Methods_t& methods = pymeth->fMethodInfo->fMethods;
 
-      int maxarg = 0;
-      MethodProxy::Methods_t::iterator maxargmeth;
-      for ( MethodProxy::Methods_t::iterator imeth = methods.begin(); imeth != methods.end(); ++imeth ) {
-         if ( maxarg < (*imeth)->GetMaxArgs() ) {
-            maxarg = (*imeth)->GetMaxArgs();
-            maxargmeth = imeth;
-         }
-      }
+      if ( methods.size() != 1 )
+         return PyTuple_New( 0 );
+
+      int maxarg = methods[0]->GetMaxArgs();
 
       PyObject* defaults = PyTuple_New( maxarg );
 
       int itup = 0;
       for ( int iarg = 0; iarg < maxarg; ++iarg ) {
-         PyObject* defvalue = (*maxargmeth)->GetArgDefault( iarg );
+         PyObject* defvalue = methods[0]->GetArgDefault( iarg );
          if ( defvalue )
             PyTuple_SET_ITEM( defaults, itup++, defvalue );
       }

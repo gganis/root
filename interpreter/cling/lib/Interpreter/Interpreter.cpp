@@ -21,7 +21,7 @@
 #include "cling/Utils/AST.h"
 
 #include "clang/AST/ASTContext.h"
-#include "clang/AST/Mangle.h"
+#include "clang/AST/GlobalDecl.h"
 #include "clang/Basic/TargetInfo.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/CodeGen/ModuleBuilder.h"
@@ -148,10 +148,6 @@ namespace cling {
     return m_IncrParser->getCodeGenerator();
   }
 
-  void Interpreter::unload() {
-    m_IncrParser->unloadTransaction(0);
-  }
-
   Interpreter::Interpreter(int argc, const char* const *argv,
                            const char* llvmdir /*= 0*/) :
     m_UniqueCounter(0), m_PrintAST(false), m_PrintIR(false), 
@@ -233,8 +229,6 @@ namespace cling {
       declare("#ifdef __CLING__ \n#endif");  
 #endif
       declare("#include \"cling/Interpreter/RuntimeUniverse.h\"");
-      declare("#include \"cling/Interpreter/ValuePrinter.h\"");
-
       if (getCodeGenerator()) {
         // Set up the gCling variable if it can be used
         std::stringstream initializer;
@@ -242,21 +236,10 @@ namespace cling {
           "cling::Interpreter *gCling=(cling::Interpreter*)"
                     << (uintptr_t)this << ";} }";
         declare(initializer.str());
+        m_ExecutionContext->remapCXAAtExit();
       }
 
-      // Find cling::runtime::internal::local_cxa_atexit
-      // We do not have an active transaction and that lookup might trigger
-      // deserialization
-      PushTransactionRAII pushedT(this);
-      NamespaceDecl* NSD = utils::Lookup::Namespace(&getSema(), "cling");
-      NSD = utils::Lookup::Namespace(&getSema(), "runtime");
-      NSD = utils::Lookup::Namespace(&getSema(), "internal");
-      NamedDecl* ND = utils::Lookup::Named(&getSema(), "local_cxa_atexit", NSD);
-      std::string mangledName;
-      maybeMangleDeclName(ND, mangledName);
-      m_ExecutionContext->addSymbol(mangledName.c_str(),
-                         (void*)(intptr_t)&runtime::internal::local_cxa_atexit);
-
+      declare("#include \"cling/Interpreter/ValuePrinter.h\"");
     }
     else {
       declare("#include \"cling/Interpreter/CValuePrinter.h\"");
@@ -592,26 +575,7 @@ namespace cling {
     CO.DynamicScoping = 0;
     CO.Debug = isPrintingAST();
     CO.IRDebug = isPrintingIR();
-
-    // Disable warnings which doesn't make sense when using the prompt
-    // This gets reset with the clang::Diagnostics().Reset()
-    // TODO: Here might be useful to issue unused variable diagnostic,
-    // because we don't do declaration extraction and the decl won't be visible
-    // anymore.
-    ignoreFakeDiagnostics();
-
-    // Wrap the expression
-    std::string WrapperName;
-    std::string Wrapper = input;
-    WrapInput(Wrapper, WrapperName);
-    
-    const Transaction* lastT = m_IncrParser->Compile(Wrapper, CO);
-    assert(lastT->getState() == Transaction::kCommitted && "Must be committed");
-    if (lastT->getIssuedDiags() == Transaction::kNone)
-      if (RunFunction(lastT->getWrapperFD()) < kExeFirstError)
-        return Interpreter::kSuccess;
-
-    return Interpreter::kFailure;
+    return EvaluateInternal(input, CO);
   }
 
   Interpreter::CompilationResult Interpreter::emitAllDecls(Transaction* T) {
@@ -630,6 +594,13 @@ namespace cling {
   }
 
   bool Interpreter::ShouldWrapInput(const std::string& input) {
+    // TODO: For future reference.
+    // Parser* P = const_cast<clang::Parser*>(m_IncrParser->getParser());
+    // Parser::TentativeParsingAction TA(P);
+    // TPResult result = P->isCXXDeclarationSpecifier();
+    // TA.Revert();
+    // return result == TPResult::True();
+
     llvm::OwningPtr<llvm::MemoryBuffer> buf;
     buf.reset(llvm::MemoryBuffer::getMemBuffer(input, "Cling Preparse Buf"));
     Lexer WrapLexer(SourceLocation(), getSema().getLangOpts(), input.c_str(), 
@@ -681,7 +652,7 @@ namespace cling {
       return kExeUnkownFunction;
 
     std::string mangledNameIfNeeded;
-    maybeMangleDeclName(FD, mangledNameIfNeeded);
+    utils::Analyze::maybeMangleDeclName(FD, mangledNameIfNeeded);
     ExecutionContext::ExecutionResult ExeRes =
        m_ExecutionContext->executeFunction(mangledNameIfNeeded.c_str(),
                                            getCI()->getASTContext(),
@@ -721,14 +692,17 @@ namespace cling {
     // This gets reset with the clang::Diagnostics().Reset()
     ignoreFakeDiagnostics();
 
-    Transaction* lastT = m_IncrParser->Compile(input, CO);
-    if (lastT->getIssuedDiags() != Transaction::kErrors) {
-      if (T)
-        *T = lastT;
-      return Interpreter::kSuccess;
+    if (Transaction* lastT = m_IncrParser->Compile(input, CO)) {
+      if (lastT->getIssuedDiags() != Transaction::kErrors) {
+        if (T)
+          *T = lastT;
+        return Interpreter::kSuccess;
+      }
+      return Interpreter::kFailure;     
     }
 
-    return Interpreter::kFailure;
+    // Even if the transaction was empty it is still success.
+    return Interpreter::kSuccess;
   }
 
   Interpreter::CompilationResult
@@ -745,19 +719,24 @@ namespace cling {
     std::string Wrapper = input;
     WrapInput(Wrapper, WrapperName);
 
-    Transaction* lastT = m_IncrParser->Compile(Wrapper, CO);
-    assert((!V || lastT->size()) && "No decls created!?");
-    assert((lastT->getState() == Transaction::kCommitted
-           || lastT->getState() == Transaction::kRolledBack) 
-           && "Not committed?");
-    assert(lastT->getWrapperFD() && "Must have wrapper!");
-    if (lastT->getIssuedDiags() != Transaction::kErrors)
-      if (RunFunction(lastT->getWrapperFD(), V) < kExeFirstError)
-        return Interpreter::kSuccess;
-    if (V)
-      *V = StoredValueRef::invalidValue();
+    if (Transaction* lastT = m_IncrParser->Compile(Wrapper, CO)) {
+      //FIXME: uncomment when the macro support comes in the transaction
+      //assert((!V || lastT->size()) && "No decls created!?");
+      assert((lastT->getState() == Transaction::kCommitted
+              || lastT->getState() == Transaction::kRolledBack) 
+             && "Not committed?");
+      if (lastT->getIssuedDiags() != Transaction::kErrors) {
+        if (!lastT->getWrapperFD()) // no wrapper to run
+          return Interpreter::kSuccess;
+        else if (RunFunction(lastT->getWrapperFD(), V) < kExeFirstError)
+          return Interpreter::kSuccess;
+      }
+      if (V)
+        *V = StoredValueRef::invalidValue();
 
-    return Interpreter::kFailure;
+      return Interpreter::kFailure;
+    }
+    return Interpreter::kSuccess;
   }
 
   Interpreter::CompilationResult
@@ -768,14 +747,21 @@ namespace cling {
       if (getDynamicLibraryManager()->loadLibrary(filename, false, &tryCode)
           == DynamicLibraryManager::kLoadLibSuccess)
         return kSuccess;
-      if (!tryCode)
+      if (!tryCode) {
+        llvm::errs() << "ERROR in cling::Interpreter::loadFile(): cannot find "
+                     << filename << "!\n";
         return kFailure;
+      }
     }
 
     std::string code;
     code += "#include \"" + filename + "\"";
     CompilationResult res = declare(code);
     return res;
+  }
+
+  void Interpreter::unload(unsigned numberOfTransactions) {
+    m_IncrParser->unloadLastNTransactions(numberOfTransactions);
   }
 
   void Interpreter::installLazyFunctionCreator(void* (*fp)(const std::string&)) {
@@ -864,44 +850,6 @@ namespace cling {
     m_ExecutionContext->runStaticDestructorsOnce(getModule());
   }
 
-  void Interpreter::maybeMangleDeclName(const clang::NamedDecl* D,
-                                        std::string& mangledName) const {
-    ///Get the mangled name of a NamedDecl.
-    ///
-    ///D - mangle this decl's name
-    ///mangledName - put the mangled name in here
-    if (!m_MangleCtx) {
-      m_MangleCtx.reset(getCI()->getASTContext().createMangleContext());
-    }
-    if (m_MangleCtx->shouldMangleDeclName(D)) {
-      llvm::raw_string_ostream RawStr(mangledName);
-      switch(D->getKind()) {
-      case Decl::CXXConstructor:
-        //Ctor_Complete,          // Complete object ctor
-        //Ctor_Base,              // Base object ctor
-        //Ctor_CompleteAllocating // Complete object allocating ctor (unused)
-        m_MangleCtx->mangleCXXCtor(cast<CXXConstructorDecl>(D), 
-                                   Ctor_Complete, RawStr);
-        break;
-
-      case Decl::CXXDestructor:
-        //Dtor_Deleting, // Deleting dtor
-        //Dtor_Complete, // Complete object dtor
-        //Dtor_Base      // Base object dtor
-        m_MangleCtx->mangleCXXDtor(cast<CXXDestructorDecl>(D),
-                                   Dtor_Complete, RawStr);
-        break;
-
-      default :
-        m_MangleCtx->mangleName(D, RawStr);
-        break;
-      }
-      RawStr.flush();
-    } else {
-      mangledName = D->getNameAsString();
-    }
-  }
-
   void Interpreter::ignoreFakeDiagnostics() const {
     DiagnosticsEngine& Diag = getCI()->getDiagnostics();
     // Disable warnings which doesn't make sense when using the prompt
@@ -927,11 +875,11 @@ namespace cling {
     return m_ExecutionContext->addSymbol(symbolName, symbolAddress);
   }
 
-  void* Interpreter::getAddressOfGlobal(const clang::NamedDecl* D,
+  void* Interpreter::getAddressOfGlobal(const GlobalDecl& GD,
                                         bool* fromJIT /*=0*/) const {
     // Return a symbol's address, and whether it was jitted.
     std::string mangledName;
-    maybeMangleDeclName(D, mangledName);
+    utils::Analyze::maybeMangleDeclName(GD, mangledName);
     return getAddressOfGlobal(mangledName.c_str(), fromJIT);
   }
 

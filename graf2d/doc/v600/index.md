@@ -15,6 +15,9 @@
 -   In PDF files, italic greek characters were not correct for non null
     text angle.
     
+### TImageDump
+-   Fix a `TBox` clipping issue.
+    
 ### New class TTeXDump: Graphics interface to TeX
 
 This class allow to generate `PGF/TikZ` vector graphics output
@@ -81,6 +84,8 @@ file `simple.pdf`.
     transported from a time zone to an other in a ROOT file are correct
     too. A new example test have been introduced to test the time axis
     (timeonaxis3.C)
+-   In some case the format use to build the axis labels was incorrect.
+    (cf: Jira report ROOT-5635).
 
 ### TLegend
 
@@ -152,3 +157,5 @@ file `simple.pdf`.
 -   Make sure all greek and math symbols are printed correctly by `TTexDump`.
 -   Implement dummy operators `#mbox` and `#hbox` to improve the compatibility 
     between `TLatex`, `TMathText` and `TTexDump`.
+-   Some operators like `#minus`, `#plus`, `#mp`, `#hbar` etc ... 
+    ignored the color  defined by the operator `#color`. 

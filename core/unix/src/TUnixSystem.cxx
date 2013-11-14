@@ -1095,14 +1095,14 @@ void TUnixSystem::DispatchOneEvent(Bool_t pendingOnly)
             if (fReadmask->IsSet(fd)) {
                rc = UnixSelect(fd+1, &t, 0, 0);
                if (rc < 0 && rc != -2) {
-                  SysError("DispatchOneEvent", "select: read error on %d\n", fd);
+                  SysError("DispatchOneEvent", "select: read error on %d", fd);
                   fReadmask->Clr(fd);
                }
             }
             if (fWritemask->IsSet(fd)) {
                rc = UnixSelect(fd+1, 0, &t, 0);
                if (rc < 0 && rc != -2) {
-                  SysError("DispatchOneEvent", "select: write error on %d\n", fd);
+                  SysError("DispatchOneEvent", "select: write error on %d", fd);
                   fWritemask->Clr(fd);
                }
             }
@@ -2379,7 +2379,12 @@ void TUnixSystem::StackTrace()
                Bool_t nodebug = kTRUE;
 #ifdef R__MACOSX
                if (libaddr) { }  // use libaddr
+#if defined(MAC_OS_X_VERSION_10_9)
+               // suppress deprecation warning with option -d
+               snprintf(buffer, sizeof(buffer), "%s -d -p %d 0x%016lx", addr2line, GetPid(), addr);
+#else
                snprintf(buffer, sizeof(buffer), "%s -p %d 0x%016lx", addr2line, GetPid(), addr);
+#endif
 #else
                ULong_t offset = (addr >= libaddr) ? addr - libaddr :
                                                     libaddr - addr;
@@ -4515,6 +4520,9 @@ const char *TUnixSystem::FindDynamicLibrary(TString& sLib, Bool_t quiet)
    // shared library search path). If no file name extension is provided
    // it first tries .so, .sl, .dl and then .a (for AIX).
 
+   char buf[PATH_MAX + 1];
+   char *res = realpath(sLib.Data(), buf);
+   if (res) sLib = buf;
    TString searchFor = sLib;
 #ifdef __APPLE__
    // On a MAC, a library might not have any extensions, so let's try the raw
@@ -4533,8 +4541,9 @@ const char *TUnixSystem::FindDynamicLibrary(TString& sLib, Bool_t quiet)
                    !strcmp(lib+len-6, ".dylib") ||
                    !strcmp(lib+len-3, ".sl")    ||
                    !strcmp(lib+len-2, ".a"))) {
-      if (gSystem->FindFile(GetDynamicPath(), sLib, kReadPermission))
+      if (gSystem->FindFile(GetDynamicPath(), sLib, kReadPermission)) {
          return sLib;
+      }
       if (!quiet)
          Error("FindDynamicLibrary",
                "%s does not exist in %s", searchFor.Data(), GetDynamicPath());

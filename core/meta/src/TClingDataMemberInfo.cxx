@@ -33,6 +33,7 @@
 #include "clang/AST/Attr.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
+#include "clang/AST/GlobalDecl.h"
 #include "clang/AST/Expr.h"
 #include "clang/AST/ExprCXX.h"
 #include "clang/AST/PrettyPrinter.h"
@@ -46,7 +47,7 @@ using namespace clang;
 
 TClingDataMemberInfo::TClingDataMemberInfo(cling::Interpreter *interp,
                                            TClingClassInfo *ci)
-: fInterp(interp), fClassInfo(0), fFirstTime(true), fTitle(""), fSingleDecl(0)
+: fInterp(interp), fClassInfo(0), fFirstTime(true), fTitle(""), fSingleDecl(0), fContextIdx(0U)
 {
    if (!ci) {
       // We are meant to iterate over the global namespace (well at least CINT did).
@@ -55,7 +56,11 @@ TClingDataMemberInfo::TClingDataMemberInfo(cling::Interpreter *interp,
       fClassInfo = new TClingClassInfo(*ci);
    }
    if (fClassInfo->IsValid()) {
-      const Decl *D = fClassInfo->GetDecl();
+      Decl *D = const_cast<Decl*>(fClassInfo->GetDecl());
+
+      clang::DeclContext *dc = llvm::cast<clang::DeclContext>(D);
+      dc->collectAllContexts(fContexts);
+
       // Could trigger deserialization of decls.
       cling::Interpreter::PushTransactionRAII RAII(interp);
       fIter = llvm::cast<clang::DeclContext>(D)->decls_begin();
@@ -72,7 +77,7 @@ TClingDataMemberInfo::TClingDataMemberInfo(cling::Interpreter *interp,
 TClingDataMemberInfo::TClingDataMemberInfo(cling::Interpreter *interp, 
                                            const clang::ValueDecl *ValD)
   : fInterp(interp), fClassInfo(new TClingClassInfo(interp)), fFirstTime(true), 
-    fTitle(""), fSingleDecl(ValD) {
+    fTitle(""), fSingleDecl(ValD), fContextIdx(0U) {
    using namespace llvm;
    assert((isa<TranslationUnitDecl>(ValD->getDeclContext()) || 
            isa<EnumConstantDecl>(ValD)) && "Not TU?");
@@ -214,16 +219,31 @@ int TClingDataMemberInfo::InternalNext()
       }
 
       // Handle reaching end of current decl context.
-      if (!*fIter && fIterStack.size()) {
-         // End of current decl context, and we have more to go.
-         fIter = fIterStack.back();
-         fIterStack.pop_back();
-         continue;
-      }
-      // Handle final termination.
       if (!*fIter) {
-         return 0;
+         if (fIterStack.size()) {
+            // End of current decl context, and we have more to go.
+            fIter = fIterStack.back();
+            fIterStack.pop_back();
+            continue;
+         }
+         while (!*fIter) {
+            // Check the next decl context (of namespace)
+            ++fContextIdx;
+            if (fContextIdx >= fContexts.size()) {
+               // Iterator is now invalid.
+               return 0;
+            }
+            clang::DeclContext *dc = fContexts[fContextIdx];
+            // Could trigger deserialization of decls.
+            cling::Interpreter::PushTransactionRAII RAII(fInterp);
+            fIter = dc->decls_begin();
+            if (*fIter) {
+               // Good, a non-empty context.
+               break;
+            }
+         }
       }
+
       // Valid decl, recurse into it, accept it, or reject it.
       clang::Decl::Kind DK = fIter->getKind();
       if (DK == clang::Decl::Enum) {
@@ -271,7 +291,7 @@ long TClingDataMemberInfo::Offset() const
          APValue* val = VD->evaluateValue();
          return reinterpret_cast<long>(val->getInt().getRawData());
       }
-      return reinterpret_cast<long>(fInterp->getAddressOfGlobal(VD));
+      return reinterpret_cast<long>(fInterp->getAddressOfGlobal(GlobalDecl(VD)));
    }
    // FIXME: We have to explicitly check for not enum constant because the 
    // implementation of getAddressOfGlobal relies on mangling the name and in 
@@ -518,9 +538,12 @@ const char *TClingDataMemberInfo::Title()
    // Try to get the comment either from the annotation or the header file if present
    if (AnnotateAttr *A = GetDecl()->getAttr<AnnotateAttr>())
       fTitle = A->getAnnotation().str();
-   else
+   else if (!GetDecl()->isFromASTFile()) {
       // Try to get the comment from the header file if present
+      // but not for decls from AST file, where rootcling would have
+      // created an annotation
       fTitle = ROOT::TMetaUtils::GetComment(*GetDecl()).str();
+   }
    
    return fTitle.c_str();
 }

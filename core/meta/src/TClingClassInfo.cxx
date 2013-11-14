@@ -36,10 +36,12 @@
 #include "cling/Interpreter/Interpreter.h"
 #include "cling/Interpreter/LookupHelper.h"
 #include "cling/Interpreter/StoredValueRef.h"
+#include "cling/Utils/AST.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/GlobalDecl.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/AST/Type.h"
@@ -240,6 +242,67 @@ OffsetPtrFunc_t TClingClassInfo::FindBaseOffsetFunction(const clang::Decl* decl)
    return fOffsetFunctions.lookup(decl);
 }
 
+const FunctionTemplateDecl *TClingClassInfo::GetFunctionTemplate(const char *fname) const
+{
+   // Return any method or function in this scope with the name 'fname'.
+
+   if (!IsLoaded()) {
+      return 0;
+   }
+
+   if (fType) {
+      const TypedefType *TT = llvm::dyn_cast<TypedefType>(fType);
+      if (TT) {
+         llvm::StringRef tname(TT->getDecl()->getName());
+         if (tname.equals(fname)) {
+            const NamedDecl *ndecl = llvm::dyn_cast<NamedDecl>(fDecl);
+            if (ndecl && !ndecl->getName().equals(fname)) {
+               // Constructor name matching the typedef type, use the decl name instead.
+               return GetFunctionTemplate(ndecl->getName().str().c_str());
+            }
+         }
+      }
+   }
+   const cling::LookupHelper &lh = fInterp->getLookupHelper();
+   const FunctionTemplateDecl *fd = lh.findFunctionTemplate(fDecl, fname, false);
+   return fd;
+}
+
+
+TClingMethodInfo TClingClassInfo::GetMethod(const char *fname) const
+{
+   // Return any method or function in this scope with the name 'fname'.
+
+   if (!IsLoaded()) {
+      TClingMethodInfo tmi(fInterp);
+      return tmi;
+   }
+
+   if (fType) {
+      const TypedefType *TT = llvm::dyn_cast<TypedefType>(fType);
+      if (TT) {
+         llvm::StringRef tname(TT->getDecl()->getName());
+         if (tname.equals(fname)) {
+            const NamedDecl *ndecl = llvm::dyn_cast<NamedDecl>(fDecl);
+            if (ndecl && !ndecl->getName().equals(fname)) {
+               // Constructor name matching the typedef type, use the decl name instead.
+               return GetMethod(ndecl->getName().str().c_str());
+            }
+         }
+      }
+   }
+   const cling::LookupHelper &lh = fInterp->getLookupHelper();
+   const FunctionDecl *fd = lh.findAnyFunction(fDecl, fname, false);
+   if (!fd) {
+      // Function not found.
+      TClingMethodInfo tmi(fInterp);
+      return tmi;
+   }
+   TClingMethodInfo tmi(fInterp);
+   tmi.Init(fd);
+   return tmi;
+}
+
 TClingMethodInfo TClingClassInfo::GetMethod(const char *fname,
       const char *proto, long *poffset, EFunctionMatchMode mode /*= kConversionMatch*/,
       InheritanceMode imode /*= WithInheritance*/) const
@@ -252,6 +315,13 @@ TClingMethodInfo TClingClassInfo::GetMethod(const char *fname,
       long *poffset, EFunctionMatchMode mode /*= kConversionMatch*/,
       InheritanceMode imode /*= WithInheritance*/) const
 {
+   if (poffset) {
+      *poffset = 0L;
+   }
+   if (!IsLoaded()) {
+      TClingMethodInfo tmi(fInterp);
+      return tmi;
+   }
    if (fType) {
       const TypedefType *TT = llvm::dyn_cast<TypedefType>(fType);
       if (TT) {
@@ -260,19 +330,13 @@ TClingMethodInfo TClingClassInfo::GetMethod(const char *fname,
             const NamedDecl *ndecl = llvm::dyn_cast<NamedDecl>(fDecl);
             if (ndecl && !ndecl->getName().equals(fname)) {
                // Constructor name matching the typedef type, use the decl name instead.
-               return GetMethod(ndecl->getName().str().c_str(),proto,objectIsConst,poffset,
+               return GetMethod(ndecl->getName().str().c_str(),proto,
+                                objectIsConst,poffset,
                                 mode,imode);
             }
          }
       }
       
-   }
-   if (poffset) {
-      *poffset = 0L;
-   }
-   if (!IsLoaded()) {
-      TClingMethodInfo tmi(fInterp);
-      return tmi;
    }
    const cling::LookupHelper& lh = fInterp->getLookupHelper();
    const FunctionDecl *fd;
@@ -317,6 +381,13 @@ TClingMethodInfo TClingClassInfo::GetMethod(const char *fname,
                                             long *poffset, EFunctionMatchMode mode /*= kConversionMatch*/,
                                             InheritanceMode imode /*= WithInheritance*/) const
 {
+   if (poffset) {
+      *poffset = 0L;
+   }
+   if (!IsLoaded()) {
+      TClingMethodInfo tmi(fInterp);
+      return tmi;
+   }
    if (fType) {
       const TypedefType *TT = llvm::dyn_cast<TypedefType>(fType);
       if (TT) {
@@ -331,13 +402,6 @@ TClingMethodInfo TClingClassInfo::GetMethod(const char *fname,
          }
       }
       
-   }
-   if (poffset) {
-      *poffset = 0L;
-   }
-   if (!IsLoaded()) {
-      TClingMethodInfo tmi(fInterp);
-      return tmi;
    }
    const cling::LookupHelper& lh = fInterp->getLookupHelper();
    const FunctionDecl *fd;
@@ -473,8 +537,15 @@ static bool HasBody(const clang::FunctionDecl &decl, const cling::Interpreter &i
 {
    if (decl.hasBody()) return true;
    
+   GlobalDecl GD;
+   if (const CXXConstructorDecl* Ctor = dyn_cast<CXXConstructorDecl>(&decl))
+     GD = GlobalDecl(Ctor, Ctor_Complete);
+   else if (const CXXDestructorDecl* Dtor = dyn_cast<CXXDestructorDecl>(&decl))
+     GD = GlobalDecl(Dtor, Dtor_Deleting);
+   else
+     GD = GlobalDecl(&decl);
    std::string mangledName;
-   interp.maybeMangleDeclName(&decl, mangledName);
+   cling::utils::Analyze::maybeMangleDeclName(GD, mangledName);
 
    void *GV = interp.getAddressOfGlobal(mangledName.c_str());
    if (GV) return true;
@@ -1021,33 +1092,30 @@ const char *TClingClassInfo::FileName()
    if (!IsValid()) {
       return 0;
    }
-   fDeclFileName = ROOT::TMetaUtils::GetFileName(GetDecl());
+   fDeclFileName = ROOT::TMetaUtils::GetFileName(GetDecl(), *fInterp);
    return fDeclFileName.c_str();
 }
 
-const char *TClingClassInfo::FullName(const ROOT::TMetaUtils::TNormalizedCtxt &normCtxt) const
+void TClingClassInfo::FullName(std::string &output, const ROOT::TMetaUtils::TNormalizedCtxt &normCtxt) const
 {
    // Return QualifiedName.
+   output.clear();
    if (!IsValid()) {
-      return 0;
+      return;
    }
-   // Note: This *must* be static because we are returning a pointer inside it!
-   static std::string buf;
-   buf.clear();
    if (fType) {
       QualType type(fType, 0);
-      ROOT::TMetaUtils::GetNormalizedName(buf, type, *fInterp, normCtxt);
+      ROOT::TMetaUtils::GetNormalizedName(output, type, *fInterp, normCtxt);
    }
    else {
       if (const NamedDecl* ND =
             llvm::dyn_cast<NamedDecl>(fDecl)) {
          PrintingPolicy Policy(fDecl->getASTContext().
             getPrintingPolicy());
-         llvm::raw_string_ostream stream(buf);
+         llvm::raw_string_ostream stream(output);
          ND->getNameForDiagnostic(stream, Policy, /*Qualified=*/true);
       }
    }
-   return buf.c_str();
 }
 
 const char *TClingClassInfo::Name() const
@@ -1086,9 +1154,11 @@ const char *TClingClassInfo::Title()
       }
    }
    // Try to get the comment from the header file, if present.
+   // but not for decls from AST file, where rootcling would have
+   // created an annotation
    const CXXRecordDecl *CRD =
       llvm::dyn_cast<CXXRecordDecl>(GetDecl());
-   if (CRD) {
+   if (CRD && !CRD->isFromASTFile()) {
       fTitle = ROOT::TMetaUtils::GetClassComment(*CRD,0,*fInterp).str();
    }
    return fTitle.c_str();

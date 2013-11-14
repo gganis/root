@@ -196,7 +196,11 @@ public: // Public Interface
    TString GetMangledNameWithPrototype(TClass* cl, const char* method, const char* proto, Bool_t objectIsConst = kFALSE, ROOT::EFunctionMatchMode mode = ROOT::kConversionMatch);
    void*   GetInterfaceMethod(TClass* cl, const char* method, const char* params, Bool_t objectIsConst = kFALSE);
    void*   GetInterfaceMethodWithPrototype(TClass* cl, const char* method, const char* proto, Bool_t objectIsConst = kFALSE, ROOT::EFunctionMatchMode mode = ROOT::kConversionMatch);
-   const char* GetInterpreterTypeName(const char* name, Bool_t full = kFALSE);
+   DeclId_t GetFunction(ClassInfo_t *cl, const char *funcname);
+   DeclId_t GetFunctionWithPrototype(ClassInfo_t *cl, const char* method, const char* proto, Bool_t objectIsConst = kFALSE, ROOT::EFunctionMatchMode mode = ROOT::kConversionMatch);
+   DeclId_t GetFunctionWithValues(ClassInfo_t *cl, const char* method, const char* params, Bool_t objectIsConst = kFALSE);
+   DeclId_t GetFunctionTemplate(ClassInfo_t *cl, const char *funcname);
+   void    GetInterpreterTypeName(const char* name, std::string &output, Bool_t full = kFALSE);
    void    Execute(const char* function, const char* params, int* error = 0);
    void    Execute(TObject* obj, TClass* cl, const char* method, const char* params, int* error = 0);
    void    Execute(TObject* obj, TClass* cl, const char* method, const char* params, Bool_t objectIsConst, int* error = 0);
@@ -249,8 +253,10 @@ public: // Public Interface
 
    // core/meta helper functions.
    virtual TMethodCall::EReturnType MethodCallReturnType(TFunction *func) const;
+   virtual void GetFunctionName(const clang::FunctionDecl *decl, std::string &name) const;
 
    // CallFunc interface
+   virtual DeclId_t GetDeclId(CallFunc_t *info) const;
    virtual void   CallFunc_Delete(CallFunc_t* func) const;
    virtual void   CallFunc_Exec(CallFunc_t* func, void* address) const;
    virtual void   CallFunc_Exec(CallFunc_t* func, void* address, TInterpreterValue& val) const;
@@ -281,6 +287,8 @@ public: // Public Interface
    virtual void   CallFunc_SetFuncProto(CallFunc_t* func, ClassInfo_t* info, const char* method, const std::vector<TypeInfo_t*> &proto, bool objectIsConst, Long_t* Offset, ROOT::EFunctionMatchMode mode = ROOT::kConversionMatch) const;
 
    // ClassInfo interface
+   virtual DeclId_t GetDeclId(ClassInfo_t *info) const;
+   virtual Bool_t ClassInfo_Contains(ClassInfo_t *info, DeclId_t declid) const;
    virtual Long_t ClassInfo_ClassProperty(ClassInfo_t* info) const;
    virtual void   ClassInfo_Delete(ClassInfo_t* info) const;
    virtual void   ClassInfo_Delete(ClassInfo_t* info, void* arena) const;
@@ -347,11 +355,25 @@ public: // Public Interface
    virtual const char* DataMemberInfo_Title(DataMemberInfo_t* dminfo) const;
    virtual const char* DataMemberInfo_ValidArrayIndex(DataMemberInfo_t* dminfo) const;
 
+   // Function Template interface
+   virtual DeclId_t GetDeclId(FuncTempInfo_t *info) const;
+   virtual void   FuncTempInfo_Delete(FuncTempInfo_t * /* ft_info */) const;
+   virtual FuncTempInfo_t  *FuncTempInfo_Factory(DeclId_t declid) const;
+   virtual FuncTempInfo_t  *FuncTempInfo_FactoryCopy(FuncTempInfo_t * /* ft_info */) const;
+   virtual Bool_t FuncTempInfo_IsValid(FuncTempInfo_t * /* ft_info */) const;
+   virtual UInt_t FuncTempInfo_TemplateNargs(FuncTempInfo_t * /* ft_info */) const;
+   virtual UInt_t FuncTempInfo_TemplateMinReqArgs(FuncTempInfo_t * /* ft_info */) const;
+   virtual Long_t FuncTempInfo_Property(FuncTempInfo_t * /* ft_info */) const;
+   virtual void FuncTempInfo_Name(FuncTempInfo_t * /* ft_info */, TString& name) const;
+   virtual void FuncTempInfo_Title(FuncTempInfo_t * /* ft_info */, TString& name) const;
+
    // MethodInfo interface
+   virtual DeclId_t GetDeclId(MethodInfo_t *info) const;
    virtual void   MethodInfo_CreateSignature(MethodInfo_t* minfo, TString& signature) const;
    virtual void   MethodInfo_Delete(MethodInfo_t* minfo) const;
    virtual MethodInfo_t*  MethodInfo_Factory() const;
    virtual MethodInfo_t*  MethodInfo_Factory(ClassInfo_t *clinfo) const;
+   virtual MethodInfo_t  *MethodInfo_Factory(DeclId_t declid) const;
    virtual MethodInfo_t*  MethodInfo_FactoryCopy(MethodInfo_t* minfo) const;
    virtual void*  MethodInfo_InterfaceMethod(MethodInfo_t* minfo) const;
    virtual bool   MethodInfo_IsValid(MethodInfo_t* minfo) const;
@@ -396,6 +418,7 @@ public: // Public Interface
    virtual const char* TypeInfo_TrueName(TypeInfo_t* tinfo) const;
 
    // TypedefInfo interface
+   virtual DeclId_t GetDeclId(TypedefInfo_t *info) const;
    virtual void   TypedefInfo_Delete(TypedefInfo_t* tinfo) const;
    virtual TypedefInfo_t*  TypedefInfo_Factory() const;
    virtual TypedefInfo_t*  TypedefInfo_Factory(const char* name) const;

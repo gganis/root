@@ -47,12 +47,13 @@
 
 // The following are opaque type and are never really declared
 // The specific implemenation of TInterpreter will cast the
-// value of pointer to this types to correct (but possibly
+// value of pointer to this types to the correct type (possibly
 // distinct from these)
 class CallFunc_t;
 class ClassInfo_t;
 class BaseClassInfo_t;
 class DataMemberInfo_t;
+class FuncTempInfo_t;
 class MethodInfo_t;
 class MethodArgInfo_t;
 class MethodArgInfo_t;
@@ -166,6 +167,7 @@ public:
    // Type of STL container (returned by IsSTLContainer).
    enum ESTLType {kNone=0, kVector=1, kList, kDeque, kMap, kMultimap, kSet, kMultiset};
 
+   typedef const void *DeclId_t;
    ClassDef(TDictionary,0)  //ABC defining interface to dictionary
 };
 

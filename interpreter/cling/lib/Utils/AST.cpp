@@ -8,13 +8,17 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/DeclarationName.h"
+#include "clang/AST/GlobalDecl.h"
 #include "clang/Sema/Sema.h"
 #include "clang/Sema/Lookup.h"
 #include "clang/AST/DeclTemplate.h"
 
 #include "llvm/ADT/ArrayRef.h"
+#include "clang/AST/Mangle.h"
 #include "llvm/ADT/StringRef.h"
+
 #include <stdio.h>
+
 using namespace clang;
 
 namespace cling {
@@ -38,6 +42,46 @@ namespace utils {
 
     return StringRef(ND->getNameAsString())
       .startswith(Synthesize::UniquePrefix);
+  }
+
+  void Analyze::maybeMangleDeclName(const clang::GlobalDecl& GD,
+                                    std::string& mangledName) {
+    // copied and adapted from clang::CodeGen::CodeGenModule::getMangledName
+
+    clang::NamedDecl* D
+      = cast<NamedDecl>(const_cast<clang::Decl*>(GD.getDecl()));
+    llvm::OwningPtr<MangleContext> mangleCtx;
+    mangleCtx.reset(D->getASTContext().createMangleContext());
+    if (!mangleCtx->shouldMangleDeclName(D)) {
+      IdentifierInfo *II = D->getIdentifier();
+      assert(II && "Attempt to mangle unnamed decl.");
+      mangledName = II->getName();
+      return;
+    }
+    
+    llvm::raw_string_ostream RawStr(mangledName);
+    switch(D->getKind()) {
+    case Decl::CXXConstructor:
+      //Ctor_Complete,          // Complete object ctor
+      //Ctor_Base,              // Base object ctor
+      //Ctor_CompleteAllocating // Complete object allocating ctor (unused)
+      mangleCtx->mangleCXXCtor(cast<CXXConstructorDecl>(D), 
+                               GD.getCtorType(), RawStr);
+      break;
+
+    case Decl::CXXDestructor:
+      //Dtor_Deleting, // Deleting dtor
+      //Dtor_Complete, // Complete object dtor
+      //Dtor_Base      // Base object dtor
+      mangleCtx->mangleCXXDtor(cast<CXXDestructorDecl>(D),
+                               GD.getDtorType(), RawStr);
+      break;
+
+    default :
+      mangleCtx->mangleName(D, RawStr);
+      break;
+    }
+    RawStr.flush();
   }
 
   Expr* Analyze::GetOrCreateLastExpr(FunctionDecl* FD, 
@@ -855,8 +899,32 @@ namespace utils {
      
       bool mightHaveChanged = false;
       llvm::SmallVector<TemplateArgument, 4> desArgs;
+      unsigned int argi = 0;
       for(TemplateSpecializationType::iterator I = TST->begin(), E = TST->end();
-          I != E; ++I) {
+          I != E; ++I, ++argi) {
+
+         if (I->getKind() == TemplateArgument::Expression) {
+           // If we have an expression, we need to replace it / desugar it
+           // as it could contain unqualifed (or partially qualified or
+           // private) parts.
+
+           QualType canon = QT->getCanonicalTypeInternal();
+           const RecordType *TSTRecord
+              = dyn_cast<const RecordType>(canon.getTypePtr());
+           if (TSTRecord) {
+             if (const ClassTemplateSpecializationDecl* TSTdecl =
+                dyn_cast<ClassTemplateSpecializationDecl>(TSTRecord->getDecl()))
+             {
+               const TemplateArgumentList& templateArgs
+                 = TSTdecl->getTemplateArgs();
+
+                mightHaveChanged = true;
+                desArgs.push_back(templateArgs[argi]);
+                continue;
+             }
+           }
+         }
+
         if (I->getKind() != TemplateArgument::Type) {
           desArgs.push_back(*I);
           continue;
@@ -905,6 +973,7 @@ namespace utils {
           llvm::SmallVector<TemplateArgument, 4> desArgs;
           for(unsigned int I = 0, E = templateArgs.size();
               I != E; ++I) {
+
             if (templateArgs[I].getKind() != TemplateArgument::Type) {
               desArgs.push_back(templateArgs[I]);
               continue;
@@ -930,10 +999,11 @@ namespace utils {
           // If desugaring happened allocate new type in the AST.
           if (mightHaveChanged) {
             Qualifiers qualifiers = QT.getLocalQualifiers();
-            QT = Ctx.getTemplateSpecializationType(TemplateName(TSTdecl->getSpecializedTemplate()),
+            QT = Ctx.getTemplateSpecializationType(TemplateName(
+                                             TSTdecl->getSpecializedTemplate()),
                                                    desArgs.data(),
                                                    desArgs.size(),
-                                                   TSTRecord->getCanonicalTypeInternal());
+                                         TSTRecord->getCanonicalTypeInternal());
             QT = Ctx.getQualifiedType(QT, qualifiers);
           }
         }
@@ -944,6 +1014,8 @@ namespace utils {
       // the keyword (humm ... what about anonymous types?)
       QT = Ctx.getElaboratedType(ETK_None,prefix,QT);
       QT = Ctx.getQualifiedType(QT, prefix_qualifiers);
+    } else if (original_prefix) {
+       QT = Ctx.getQualifiedType(QT, prefix_qualifiers);
     }
     return QT;   
   }

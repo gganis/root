@@ -17,8 +17,7 @@
 //                                                                      //
 // TFunction                                                            //
 //                                                                      //
-// Dictionary of global functions (global functions are obtained from   //
-// CINT).                                                               //
+// Dictionary of global functions.                                      //
 //                                                                      //
 //////////////////////////////////////////////////////////////////////////
 
@@ -34,7 +33,7 @@ friend class TCling;
 friend class TMethodCall;
 
 protected:
-   MethodInfo_t   *fInfo;            //pointer to CINT function info
+   MethodInfo_t   *fInfo;            //pointer to Interpreter function info
    TString         fMangledName;     //Mangled name as determined by CINT.
    TString         fSignature;       //string containing function signature
    TList          *fMethodArgs;      //list of function arguments
@@ -55,9 +54,12 @@ public:
    TList              *GetListOfMethodArgs();
    Int_t               GetNargs() const;
    Int_t               GetNargsOpt() const;
+   DeclId_t            GetDeclId() const;
    void               *InterfaceMethod() const;
+   virtual Bool_t      IsValid() const;
    Long_t              Property() const;
    Long_t              ExtraProperty() const;
+   virtual bool        Update(MethodInfo_t *info);
 
    ClassDef(TFunction,0)  //Dictionary for global function
 };

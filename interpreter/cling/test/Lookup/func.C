@@ -5,6 +5,7 @@
 #include "cling/Interpreter/LookupHelper.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
+#include "clang/AST/DeclTemplate.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdio>
@@ -125,14 +126,6 @@ public:
    void A_n(B& b) { b.B_f(); }
    void A_n(const char *msg, int ndim = 0) { if (ndim) ++msg; }
 };
-// Note: In CINT, looking up a class template specialization causes
-//       instantiation, but looking up a function template specialization
-//       does not, so we explicitly request the instantiations we are
-//       going to lookup so they will be there to find.
-template void A::A_k(int);
-template void A::A_k(double);
-template void A::B_k(int);
-template void A::B_k(double);
 B b_obj;
 B* b_ptr = &b_obj;
 B* b_ary = new B[3];
@@ -900,7 +893,7 @@ func_B_m_proto->print(llvm::errs());
 
 
 //
-//  Test finding a member function that const or not
+//  Test finding a member function that are const or not
 //
 
 const clang::FunctionDecl* func_B_n_args = lookup.findFunctionArgs(class_A, "B_n", "", false);
@@ -1283,6 +1276,47 @@ dumpDecl("func_B_plus_proto", func_B_plus_proto);
 //CHECK-NEXT:     return b;
 //CHECK-NEXT: }
 
+//
+// Test finding simple member function (including template instantiations
+// from just the name.
+//
+
+const clang::FunctionDecl* func_B_j_name = lookup.findAnyFunction(class_A, "B_j");
+
+printf("func_B_j_name: 0x%lx\n", (unsigned long) func_B_j_name);
+//CHECK: func_B_j_name: 0x{{[1-9a-f][0-9a-f]*$}}
+func_B_j_name->print(llvm::errs());
+//CHECK-NEXT: void B_j(int vi, int vj) {
+//CHECK-NEXT:   int x = vi;
+//CHECK-NEXT:   int y = vj;
+//CHECK-NEXT: }
+
+const clang::FunctionDecl* func_B_k1_name = lookup.findAnyFunction(class_A, "B_k<float>");
+
+printf("func_B_k1_name: 0x%lx\n", (unsigned long) func_B_k1_name);
+//CHECK: func_B_k1_name: 0x{{[1-9a-f][0-9a-f]*$}}
+func_B_k1_name->print(llvm::errs());
+//CHECK-NEXT: void B_k(float v) {
+//CHECK-NEXT:     float x = v;
+//CHECK-NEXT: }
+
+const clang::FunctionDecl* func_B_k1_name_2 = lookup.findAnyFunction(class_A, "B_k");
+
+printf("func_B_k1_name_2: 0x%lx\n", (unsigned long) func_B_k1_name_2);
+//CHECK: func_B_k1_name_2: 0x{{[1-9a-f][0-9a-f]*$}}
+func_B_k1_name_2->print(llvm::errs());
+//CHECK-NEXT: void B_k(int v) {
+//CHECK-NEXT:     int x = v;
+//CHECK-NEXT: }
+
+const clang::FunctionTemplateDecl* func_B_k_template = lookup.findFunctionTemplate(class_A, "B_k");
+
+printf("func_B_k_template: 0x%lx\n", (unsigned long) func_B_k_template);
+//CHECK: func_B_k_template: 0x{{[1-9a-f][0-9a-f]*$}}
+func_B_k_template->print(llvm::errs());
+//CHECK-NEXT: template <class T> void B_k(T v) {
+//CHECK-NEXT:     T x = v;
+//CHECK-NEXT: }
 
 //
 //  One final check to make sure we are at the right line in the output.

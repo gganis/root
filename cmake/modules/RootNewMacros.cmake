@@ -266,7 +266,8 @@ function(ROOT_LINKER_LIBRARY library)
   if(NOT ARG_TYPE)
     set(ARG_TYPE SHARED)
   endif()
-  include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/inc ${CMAKE_BINARY_DIR}/include )
+  include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}/inc)
+  include_directories(${CMAKE_BINARY_DIR}/include)                # This is a copy and certainly should last one
   set(library_name ${library})
   if(TARGET ${library})
     message("Target ${library} already exists. Renaming target name to ${library}_new")
@@ -688,4 +689,11 @@ function(ROOT_ADD_TEST test)
     set_property(TEST ${test} PROPERTY FAIL_REGULAR_EXPRESSION ${ARG_FAILREGEX})
   endif()
 
+endfunction()
+
+#----------------------------------------------------------------------------
+# function ROOT_ADD_TEST_SUBDIRECTORY( <name> )
+function(ROOT_ADD_TEST_SUBDIRECTORY subdir)
+  file(RELATIVE_PATH subdir ${CMAKE_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/${subdir})
+  set_property(GLOBAL APPEND PROPERTY ROOT_TEST_SUBDIRS ${subdir})
 endfunction()

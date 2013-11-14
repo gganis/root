@@ -35,6 +35,10 @@ include(MacroEnsureVersion)
 
 #---Enable CTest package -----------------------------------------------------------------------
 #include(CTest)
+if(testing)
+  enable_testing()
+endif()
+
 #---Check if the user wants to build the project in the source directory------------------------
 ROOT_CHECK_OUT_OF_SOURCE_BUILD()
 
@@ -71,6 +75,7 @@ endif()
 if(roofit)
   add_subdirectory(roofit)
 endif()
+ROOT_ADD_TEST_SUBDIRECTORY(test)
 
 #---Global PCH-----------------------------------------------------------------------------------
 add_custom_target(onepcm ALL DEPENDS etc/allDict.cxx.pch)
@@ -118,12 +123,6 @@ endif()
 #---Configure Testing using CTest----------------------------------------------------------------
 if(testing)
   include(RootCTest)
-  add_subdirectory(test)
-  #---Install the headers which are needed to run the tests from the binary tree-----------------
-  add_custom_target(move_headers ALL 
-                    ${CMAKE_COMMAND} -DPREFIX=${CMAKE_BINARY_DIR}
-                                     -DCOMPONENTS="headers\;tutorials"
-                                     -P ${CMAKE_SOURCE_DIR}/cmake/scripts/local_install.cmake )
 endif()
 
 #---Packaging-------------------------------------------------------------------------------------

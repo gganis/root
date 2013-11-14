@@ -12,9 +12,12 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <stdlib.h>
+
 #ifdef WIN32
 #include <Windows.h>
 #else
+#include <limits.h> /* PATH_MAX */
 #include <dlfcn.h>
 #endif
 
@@ -179,14 +182,29 @@ namespace cling {
     
     assert(!FoundDyLib.empty() && "The shared lib exists but can't find it!");
 
+    // get canonical path name and check if already loaded
+#ifdef WIN32
+    llvm::SmallString<_MAX_PATH> FullPath("");
+    char *res = _fullpath((char *)FullPath.data(), FoundDyLib.c_str(), _MAX_PATH);
+#else
+    llvm::SmallString<PATH_MAX+1> FullPath("");
+    char *res = realpath(FoundDyLib.c_str(), (char *)FullPath.data());
+#endif
+    if (res == 0) {
+      llvm::errs() << "cling::Interpreter::tryLinker(): error getting real (canonical) path\n";
+      return kLoadLibError;
+    }
+    FullPath.set_size(strlen(res));
+    if (m_loadedLibraries.find(FullPath) != m_loadedLibraries.end())
+      return kLoadLibExists;
+
     // TODO: !permanent case
 #ifdef WIN32
 # error "Windows DLL opening still needs to be implemented!"
     void* dyLibHandle = needs to be implemented!;
     std::string errMsg;
 #else
-    const void* dyLibHandle
-      = dlopen(FoundDyLib.c_str(), RTLD_LAZY|RTLD_GLOBAL);
+    const void* dyLibHandle = dlopen(FullPath.c_str(), RTLD_LAZY|RTLD_GLOBAL);
     std::string errMsg;
     if (const char* DyLibError = dlerror()) {
       errMsg = DyLibError;
@@ -197,17 +215,17 @@ namespace cling {
       return kLoadLibError;
     }
     std::pair<DyLibs::iterator, bool> insRes
-      = m_DyLibs.insert(std::pair<DyLibHandle, std::string>(dyLibHandle, 
-                                                            FoundDyLib.str()));
+      = m_DyLibs.insert(std::pair<DyLibHandle, std::string>(dyLibHandle,
+                                                            FullPath.str()));
     if (!insRes.second)
       return kLoadLibExists;
+    m_loadedLibraries.insert(FullPath);
     return kLoadLibSuccess;
   }
 
   DynamicLibraryManager::LoadLibResult
   DynamicLibraryManager::loadLibrary(const std::string& filename,
                                      bool permanent, bool* tryCode) {
-    // If it's not an absolute path, prepend "lib"
     llvm::SmallString<128> Absolute((llvm::StringRef(filename)));
     llvm::sys::fs::make_absolute(Absolute);
     bool isAbsolute = filename == Absolute.c_str();
@@ -238,15 +256,22 @@ namespace cling {
   }
 
   bool
-  DynamicLibraryManager::isDynamicLibraryLoaded(llvm::StringRef fullPath) const{
-    for(DyLibs::const_iterator I = m_DyLibs.begin(), E = m_DyLibs.end(); 
-        I != E; ++I) {
-      if (fullPath.equals((I->second)))
-        return true;
+  DynamicLibraryManager::isDynamicLibraryLoaded(llvm::StringRef fullPath) const {
+    // get canonical path name and check if already loaded
+#ifdef WIN32
+    char buf[_MAX_PATH];
+    char *res = _fullpath(buf, fullPath.str().c_str(), _MAX_PATH);
+#else
+    char buf[PATH_MAX+1];
+    char *res = realpath(fullPath.str().c_str(), buf);
+#endif
+    if (res == 0) {
+      llvm::errs() << "cling::Interpreter::isDynamicLibraryLoaded(): error getting real (canonical) path\n";
+      return false;
     }
+    if (m_loadedLibraries.find(buf) != m_loadedLibraries.end()) return true;
     return false;
   }
-
 
   void DynamicLibraryManager::ExposeHiddenSharedLibrarySymbols(void* handle) {
     llvm::sys::DynamicLibrary::addPermanentLibrary(const_cast<void*>(handle));

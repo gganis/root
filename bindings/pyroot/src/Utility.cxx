@@ -22,6 +22,7 @@
 #include "TCollection.h"
 #include "TDataType.h"
 #include "TFunction.h"
+#include "TMethod.h"
 #include "TMethodArg.h"
 #include "TError.h"
 #include "TInterpreter.h"
@@ -351,32 +352,18 @@ Bool_t PyROOT::Utility::AddBinaryOperator( PyObject* pyclass, const char* op, co
 
 //____________________________________________________________________________
 static inline TFunction* FindAndAddOperator( const std::string& lcname, const std::string& rcname,
-     const char* op, TCollection* funcs ) {
+     const char* op, TClass* klass = 0 ) {
 // Helper to find a function with matching signature in 'funcs'.
    std::string opname = "operator";
    opname += op;
+   std::string proto = lcname + ", " + rcname;
 
-   TIter ifunc( funcs );
+// case of global namespace
+   if ( ! klass )
+      return gROOT->GetGlobalFunctionWithPrototype( opname.c_str(), proto.c_str() );
 
-   TFunction* func = 0;
-   while ( (func = (TFunction*)ifunc.Next()) ) {
-      if ( func->GetListOfMethodArgs()->GetSize() != 2 )
-         continue;
-
-      if ( func->GetName() == opname ) {
-         if ( ( lcname == ResolveTypedef( TClassEdit::CleanType(
-                  ((TMethodArg*)func->GetListOfMethodArgs()->At(0))->GetTypeNormalizedName().c_str(), 1 ).c_str() ) ) &&
-              ( rcname == ResolveTypedef( TClassEdit::CleanType(
-                  ((TMethodArg*)func->GetListOfMethodArgs()->At(1))->GetTypeNormalizedName().c_str(), 1 ).c_str() ) ) ) {
-
-         // done; break out loop
-            return func;
-         }
-
-      }
-   }
-
-   return 0;
+// case of specific namespace
+   return klass->GetMethodWithPrototype( opname.c_str(), proto.c_str() );
 }
 
 Bool_t PyROOT::Utility::AddBinaryOperator( PyObject* pyclass, const std::string& lcname,
@@ -387,34 +374,35 @@ Bool_t PyROOT::Utility::AddBinaryOperator( PyObject* pyclass, const std::string&
 // using information).
    static TClassRef gnucxx( "__gnu_cxx" );
 
-   TFunction* func = 0;
+   PyCallable* pyfunc = 0;
    if ( gnucxx.GetClass() ) {
-      func = FindAndAddOperator( lcname, rcname, op, gnucxx->GetListOfMethods() );
-      if ( func ) {
-         PyCallable* pyfunc = new TFunctionHolder( TScopeAdapter::ByName( "__gnu_cxx" ), func );
-         return Utility::AddToClass( pyclass, label ? label : gC2POperatorMapping[ op ].c_str(), pyfunc );
-      }
+      TFunction* func = FindAndAddOperator( lcname, rcname, op, gnucxx.GetClass() );
+      if ( func ) pyfunc = new TFunctionHolder( TScopeAdapter::ByName( "__gnu_cxx" ), func );
    }
 
-   if ( ! func )
-      func = FindAndAddOperator( lcname, rcname, op, gROOT->GetListOfGlobalFunctions( kTRUE ) );
-
-   if ( func ) {
-   // found a matching overload; add to class
-      PyCallable* pyfunc = new TFunctionHolder( func );
-      return Utility::AddToClass( pyclass, label ? label : gC2POperatorMapping[ op ].c_str(), pyfunc );
+   if ( ! pyfunc ) {
+      TFunction* func = FindAndAddOperator( lcname, rcname, op );
+      if ( func ) pyfunc = new TFunctionHolder( func );
    }
+
+   if ( pyfunc )    // found a matching overload; add to class
+      return Utility::AddToClass(
+         pyclass, label ? label : gC2POperatorMapping[ op ].c_str(), pyfunc );
 
    return kFALSE;
 }
 
 //____________________________________________________________________________
-Bool_t PyROOT::Utility::BuildTemplateName( PyObject*& pyname, PyObject* args, int argoff )
+PyObject* PyROOT::Utility::BuildTemplateName( PyObject* pyname, PyObject* args, int argoff )
 {
 // Helper to construct the "< type, type, ... >" part of a templated name (either
 // for a class as in MakeRootTemplateClass in RootModule.cxx) or for method lookup
 // (as in TemplatedMemberHook, below).
 
+   if ( pyname )
+      pyname = PyROOT_PyUnicode_FromString( PyROOT_PyUnicode_AsString( pyname ) );
+   else
+      pyname = PyROOT_PyUnicode_FromString( "" );
    PyROOT_PyUnicode_AppendAndDel( &pyname, PyROOT_PyUnicode_FromString( "<" ) );
 
    Py_ssize_t nArgs = PyTuple_GET_SIZE( args );
@@ -438,7 +426,8 @@ Bool_t PyROOT::Utility::BuildTemplateName( PyObject*& pyname, PyObject* args, in
       // last ditch attempt, works for things like int values
          PyObject* pystr = PyObject_Str( tn );
          if ( ! pystr ) {
-            return kFALSE;
+            Py_DECREF( pyname );
+            return 0;
          }
 
          PyROOT_PyUnicode_AppendAndDel( &pyname, pystr );
@@ -455,7 +444,7 @@ Bool_t PyROOT::Utility::BuildTemplateName( PyObject*& pyname, PyObject* args, in
    else
       PyROOT_PyUnicode_AppendAndDel( &pyname, PyROOT_PyUnicode_FromString( ">" ) );
 
-   return kTRUE;
+   return pyname;
 }
 
 //____________________________________________________________________________
@@ -593,57 +582,6 @@ std::string PyROOT::Utility::MapOperatorName( const std::string& name, Bool_t bT
 }
 
 //____________________________________________________________________________
-PyROOT::Utility::EDataType PyROOT::Utility::EffectiveType( const std::string& name )
-{
-// Determine the actual type (to be used for types that are not classes).
-   EDataType effType = kOther;
-
-// TODO: figure out enum for Cling
-/*   if ( ti.Property() & G__BIT_ISENUM )
-     return EDataType( (int) kEnum ); */
-
-   std::string fullType = TClassEdit::CleanType( name.c_str() );
-   std::string resolvedType = TClassEdit::ResolveTypedef( fullType.c_str(), true );
-
-   std::string shortName = TClassEdit::ShortType( resolvedType.c_str(), 1 );
-
-   const std::string& cpd = Compound( name );
-   const int mask = cpd == "*" ? kPtrMask : 0;
-
-   if ( shortName == "bool" )
-      effType = EDataType( (int) kBool | mask );
-   else if ( shortName == "char" )
-      effType = EDataType( (int) kChar | mask );
-   else if ( shortName == "short" )
-      effType = EDataType( (int) kShort | mask );
-   else if ( shortName == "int" )
-      effType = EDataType( (int) kInt | mask );
-   else if ( shortName == "unsigned int" )
-      effType = EDataType( (int) kUInt | mask );
-   else if ( shortName == "long" )
-      effType = EDataType( (int) kLong | mask );
-   else if ( shortName == "unsigned long" )
-      effType = EDataType( (int) kULong | mask );
-   else if ( shortName == "long long" )
-      effType = EDataType( (int) kLongLong | mask );
-   else if ( shortName == "float" )
-      effType = EDataType( (int) kFloat | mask );
-   else if ( shortName == "double" )
-      effType = EDataType( (int) kDouble | mask );
-   else if ( shortName == "void" )
-      effType = EDataType( (int) kVoid | mask );
-   else if ( shortName == "string" && cpd == "" )
-      effType = kSTLString;
-   else if ( name == "#define" ) {
-      effType = kMacro;
-   }
-   else
-      effType = kOther;
-
-   return effType;
-}
-
-//____________________________________________________________________________
 const std::string PyROOT::Utility::Compound( const std::string& name )
 {
 // Break down the compound of a fully qualified type name.
@@ -739,7 +677,7 @@ const std::string PyROOT::Utility::ResolveTypedef( const std::string& tname,
          }
       }
 
-   // for std::map, extract the key_type or iterator
+   // for std::map, extract the key_type, or iterator for either map or list
       else {
          pos = tclean.rfind( "::key_type" );
          if ( pos != std::string::npos ) {
@@ -752,8 +690,7 @@ const std::string PyROOT::Utility::ResolveTypedef( const std::string& tname,
                         clName.substr( pos1+1, pos2-pos1-1 ) +
                         (isReference ? "&" : Compound( clName ));
                         }
-         } else if ( tclean.find( "_Rb_tree_iterator<pair" ) != std::string::npos &&
-                     tclean.rfind( "::_Self" ) != std::string::npos ) {
+         } else if ( tclean.rfind( "::_Self" ) != std::string::npos ) {
             tclean = containing_scope ? containing_scope->GetName() : tclean;
          }
       }
@@ -765,28 +702,28 @@ const std::string PyROOT::Utility::ResolveTypedef( const std::string& tname,
 }
 
 //____________________________________________________________________________
-static std::map< std::string, std::map< ClassInfo_t*, Long_t > > sOffsets;
+static std::map< ClassInfo_t*, std::vector< std::pair< ClassInfo_t*, Long_t > > > sOffsets;
 Long_t PyROOT::Utility::GetObjectOffset(
-      const std::string& clCurrent, ClassInfo_t* clDesired, void* obj ) {
-// root/meta base class offset (TClass:GetBaseClassOffset) fails in the case of
-// virtual inheritance, so take this little round-about way
+      ClassInfo_t* clCurrent, ClassInfo_t* clDesired, void* obj ) {
+// Forwards to TInterpreter->ClassInfo_GetBaseOffset(), just adds caching
+   if ( clCurrent == clDesired || !(clCurrent && clDesired) )
+      return 0;
 
-// TODO: this memoization is likely inefficient, but it is very much needed
-   std::map< std::string, std::map< ClassInfo_t*, Long_t > >::iterator
+   std::map< ClassInfo_t*, std::vector< std::pair< ClassInfo_t*, Long_t > > >::iterator
       mit1 = sOffsets.find( clCurrent );
    if ( mit1 != sOffsets.end() ) {
-      std::map< ClassInfo_t*, Long_t >::iterator mit2 = mit1->second.find( clDesired );
-      if ( mit2 != mit1->second.end() )
-         return mit2->second;
+      for ( std::vector< std::pair< ClassInfo_t*, Long_t > >::iterator ioff = mit1->second.begin();
+            ioff != mit1->second.end(); ++ioff ) {
+         if ( ioff->first == clDesired )
+            return ioff->second;
+      }
    }
 
-   std::ostringstream interpcast;
-   interpcast << "(long)(" << gInterpreter->ClassInfo_FullName( clDesired ) << "*)("
-              << clCurrent << "*)" << (void*)obj
-              << " - (long)(" << clCurrent << "*)" << (void*)obj
-              << ";";
-   Long_t offset = (Long_t)gInterpreter->ProcessLine( interpcast.str().c_str() );
-   sOffsets[ clCurrent ][ clDesired ] = offset;
+   Long_t offset = gInterpreter->ClassInfo_GetBaseOffset( clCurrent, clDesired, obj );
+   if ( 0 <= offset )
+      sOffsets[ clCurrent ].push_back( std::make_pair( clDesired, offset ) );
+   else
+      offset = 0;
    return offset;
 }
 

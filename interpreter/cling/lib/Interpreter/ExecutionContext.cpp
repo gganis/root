@@ -7,10 +7,12 @@
 #include "ExecutionContext.h"
 
 #include "cling/Interpreter/StoredValueRef.h"
+#include "cling/Interpreter/Interpreter.h" // FIXME: Remove when at_exit is ready
 
 #include "clang/AST/Type.h"
 
 #include "llvm/IR/Constants.h"
+#include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/PassManager.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -46,6 +48,47 @@ void ExecutionContext::shuttingDown() {
     const CXAAtExitElement& AEE = m_AtExitFuncs[N - I - 1];
     (*AEE.m_Func)(AEE.m_Arg);
   }
+}
+
+void ExecutionContext::remapCXAAtExit() {
+  assert(!m_CxaAtExitRemapped && "__cxa_at_exit already remapped.");
+  llvm::Function* clingAtExit
+    = m_engine->FindFunctionNamed("cling_cxa_atexit");
+  assert(clingAtExit && "cling_cxa_atexit must exist.");
+
+  llvm::Function* atExit = m_engine->FindFunctionNamed("__cxa_atexit");
+  if (!atExit) {
+    // Inject __cxa_atexit into module
+    llvm::Type* retTy = 0;
+    llvm::Type* voidPtrTy = 0;
+    if (sizeof(int) == 4) {
+      retTy = llvm::Type::getInt32Ty(llvm::getGlobalContext());
+      voidPtrTy = llvm::Type::getInt32PtrTy(llvm::getGlobalContext());
+    } else if (sizeof(int) == 8) {
+      retTy = llvm::Type::getInt64Ty(llvm::getGlobalContext());
+      voidPtrTy = llvm::Type::getInt64PtrTy(llvm::getGlobalContext());
+    } else {
+      assert(retTy && "Unsupported sizeof(int)!");
+      retTy = llvm::Type::getInt64Ty(llvm::getGlobalContext());
+      voidPtrTy = llvm::Type::getInt64PtrTy(llvm::getGlobalContext());
+    }
+
+    llvm::SmallVector<llvm::Type*, 3> argTy;
+    argTy.push_back(voidPtrTy);
+    argTy.push_back(voidPtrTy);
+    argTy.push_back(voidPtrTy);
+    llvm::FunctionType* cxaatexitTy
+      = llvm::FunctionType::get(retTy, argTy, false /*varArg*/);
+    llvm::Function* atexitFunc
+      = llvm::Function::Create(cxaatexitTy, llvm::GlobalValue::InternalLinkage,
+                               "__cxa_atexit", 0 /*module*/);
+    m_engine->addGlobalMapping(atexitFunc, clingAtExit);
+  }
+
+  void* clingAtExitAddr = m_engine->getPointerToFunction(clingAtExit);
+  assert(clingAtExitAddr && "cannot find cling_cxa_atexit");
+  m_engine->updateGlobalMapping(atExit, clingAtExitAddr);
+  m_CxaAtExitRemapped = true;
 }
 
 void ExecutionContext::InitializeBuilder(llvm::Module* m) {
@@ -160,20 +203,6 @@ ExecutionContext::executeFunction(llvm::StringRef funcname,
                                   StoredValueRef* returnValue)
 {
   // Call a function without arguments, or with an SRet argument, see SRet below
-
-  if (!m_CxaAtExitRemapped) {
-    // Rewire atexit:
-    llvm::Function* atExit = m_engine->FindFunctionNamed("__cxa_atexit");
-    llvm::Function* clingAtExit
-      = m_engine->FindFunctionNamed("cling_cxa_atexit");
-    if (atExit && clingAtExit) {
-      void* clingAtExitAddr = m_engine->getPointerToFunction(clingAtExit);
-      assert(clingAtExitAddr && "cannot find cling_cxa_atexit");
-      m_engine->updateGlobalMapping(atExit, clingAtExitAddr);
-      m_CxaAtExitRemapped = true;
-    }
-  }
-
   // We don't care whether something was unresolved before.
   m_unresolvedSymbols.clear();
 

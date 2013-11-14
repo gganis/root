@@ -31,11 +31,11 @@ std::string PyROOT::TReturnTypeAdapter::Name( unsigned int mod ) const
 // get the name of the return type that is being adapted
    std::string name = fName;
 
-   if ( ! ( mod & Rflx::QUALIFIED ) )
-      name = UnqualifiedTypeName( fName );
-
    if ( mod & Rflx::FINAL )
       name = Utility::ResolveTypedef( name );
+
+   if ( ! ( mod & Rflx::QUALIFIED ) )
+      name = UnqualifiedTypeName( fName );
 
    return name;
 }
@@ -113,28 +113,14 @@ std::string PyROOT::TMemberAdapter::Name( unsigned int mod ) const
    } else if ( mod & Rflx::FINAL )
       return Utility::ResolveTypedef( fMember->GetName() );
 
-// CLING WORKAROUND -- TMethod names are fully scoped ...
-   TMethod* m = (TMethod*)*this;
-   if (m && m->GetClass()) {
-      std::string scoped_name = m->GetName();
-      std::string class_name = m->GetClass()->GetName();
-      std::string::size_type pos = scoped_name.find(class_name + "::");
-      if (pos == 0)      // only accept found at start
-         scoped_name = scoped_name.substr(class_name.size() + 2 /* for :: */, std::string::npos);
-      return scoped_name;
-   }
-
-// CLING WORKAROUND -- should not be null, but can be due #100389
-   if ( fMember != 0 )
-      return fMember->GetName();
-   return "<unknown>";
+   return fMember->GetName();
 }
 
 //____________________________________________________________________________
 Bool_t PyROOT::TMemberAdapter::IsConstant() const
 {
 // test if the adapted member is a const method
-   return fMember ? (fMember->Property() & kIsConstMethod) : kFALSE;
+   return fMember->Property() & kIsConstMethod;
 }
 
 //____________________________________________________________________________
@@ -309,37 +295,30 @@ std::string PyROOT::TScopeAdapter::Name( unsigned int mod ) const
       return name;
    }
 
-   if ( mod & Rflx::FINAL ) {
-   /* The following G__ClassInfo lookup is badly broken ...
-      G__ClassInfo* clInfo = (G__ClassInfo*)fClass->GetClassInfo();
-      if ( mod & Rflx::SCOPED )
-         return (clInfo && clInfo->Fullname()) ? clInfo->Fullname() : fClass->GetName();
+   std::string name = fClass->GetName();
+   if ( mod & Rflx::FINAL )
+      name = Utility::ResolveTypedef( name );
 
-   // unscoped name ...
-      std::string actual = (clInfo && clInfo->Name()) ? clInfo->Name() : fClass->GetName();
+   if ( ! (mod & Rflx::SCOPED) ) {
+   // remove scope from the name
+      Int_t tpl_open = 0;
+      for ( std::string::size_type pos = name.size() - 1; 0 < pos; --pos ) {
+         std::string::value_type c = name[ pos ];
 
-   // in case of missing dictionaries, the scope won't have been stripped
-      if ( ! ( clInfo && clInfo->IsValid() ) ) {
-         std::string::size_type pos = actual.substr( 0, actual.find( '<' ) ).rfind( "::" );
-         if ( pos != std::string::npos ) {
-         // this is somewhat of a gamble, but the alternative is a guaranteed crash
-            actual = actual.substr( pos + 2, std::string::npos );
+      // count '<' and '>' to be able to skip template contents
+         if ( c == '>' )
+            ++tpl_open;
+         else if ( c == '<' )
+            --tpl_open;
+         else if ( tpl_open == 0 && c == ':' && 0 < pos && name[ pos-1 ] == ':' ) {
+         // found scope, strip name from it
+            name = name.substr( pos+1, std::string::npos );
+            break;
          }
       }
-
-      return actual;
-   */
-      return fClass->GetName();
-
-   } else if ( ! ( mod & Rflx::SCOPED ) ) {
-   /* The following G__ClassInfo lookup is badly broken ...
-      G__ClassInfo* clInfo = (G__ClassInfo*)fClass->GetClassInfo();
-      return (clInfo && clInfo->Name()) ? clInfo->Name() : fClass->GetName();
-   */
-      return fClass->GetName();
    }
 
-   return fClass->GetName();
+   return name;
 }
 
 //____________________________________________________________________________

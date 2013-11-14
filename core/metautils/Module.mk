@@ -24,7 +24,7 @@ METAUTILSTS     += $(MODDIRS)/TMetaUtils.cxx
 METAUTILSSLLVM := $(MODDIRS)/BaseSelectionRule.cxx \
                   $(MODDIRS)/ClassSelectionRule.cxx \
                   $(MODDIRS)/VariableSelectionRule.cxx \
-                  $(MODDIRS)/RClStl.cxx \
+                  $(MODDIRS)/RStl.cxx \
                   $(MODDIRS)/Scanner.cxx \
                   $(MODDIRS)/SelectionRules.cxx \
                   $(MODDIRS)/XMLReader.cxx
@@ -41,7 +41,7 @@ METAUTILSTO    := $(call stripsrc,$(METAUTILSTS:.cxx=.o))
 
 METAUTILSL     := $(MODDIRI)/LinkDef.h
 
-METAUTILSDEP   := $(METAUTILSO:.o=.d) $(METAUTILSTO:.o=.d)
+METAUTILSDEP   := $(METAUTILSO:.o=.d) $(METAUTILSTO:.o=.d) $(METAUTILSOLLVM:.o=.d)
 
 # used in the main Makefile
 ALLHDRS     += $(patsubst $(MODDIRI)/%.h,include/%.h,$(METAUTILSH) $(METAUTILSTH))
@@ -67,6 +67,7 @@ STLDICTS += lib/libvalarrayDict.$(SOEXT)
 endif
 
 STLDICTS_SRC := $(call stripsrc,$(patsubst lib/lib%Dict.$(SOEXT),$(METAUTILSDIRS)/G__std__%.cxx,$(STLDICTS)))
+STLDICTS_HDR := $(call stripsrc,$(patsubst lib/lib%Dict.$(SOEXT),$(METAUTILSDIRS)/G__std__%.h,$(STLDICTS)))
 STLDICTS_OBJ := $(patsubst %.cxx,%.o,$(STLDICTS_SRC))
 STLDICTS_DEP := $(patsubst %.cxx,%.d,$(STLDICTS_SRC))
 
@@ -107,7 +108,7 @@ clean::         clean-$(MODNAME)
 distclean-$(MODNAME): clean-$(MODNAME)
 		@rm -f $(METAUTILSDEP) \
 		   $(STLDICTS_OBJ) $(STLDICTS_DEP) $(STLDICTS_SRC) \
-		   $(STLDICTSMAPS)
+		   $(STLDICTS_HDR) $(STLDICTSMAPS)
 
 distclean::     distclean-$(MODNAME)
 

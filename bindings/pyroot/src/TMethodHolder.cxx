@@ -13,17 +13,13 @@
 #include "Adapters.h"
 
 // ROOT
-#include "TROOT.h"
 #include "TClass.h"
-#include "TString.h"
-#include "TClassEdit.h"
-#include "TVirtualMutex.h"
-#include "TException.h"
+#include "TException.h"       // for TRY ... CATCH
 #include "TInterpreter.h"
+#include "TVirtualMutex.h"    // for R__LOCKGUARD2
 
 // Standard
 #include <assert.h>
-#include <string.h>
 #include <exception>
 #include <string>
 
@@ -170,21 +166,9 @@ Bool_t PyROOT::TMethodHolder::InitCallFunc_()
       gcl,
       (Bool_t)fMethod == true ? fMethod.Name().c_str() : fClass.Name().c_str(),
       callString.c_str(),
-      fMethod.IsConstant(),
+      (Bool_t)fMethod == true ? fMethod.IsConstant() : kFALSE,
       &fOffset,
       ROOT::kExactMatch );
-
-// CLING WORKAROUND -- ROOT/meta thinks string is string, but gInterpreter disagrees
-   if ( ! gInterpreter->CallFunc_IsValid( fMethodCall ) && fClass.Name() == "string" ) {
-      gInterpreter->CallFunc_SetFuncProto(
-         fMethodCall,
-         gcl,
-         "basic_string<char,char_traits<char>,allocator<char> >",
-         callString.c_str(),
-         fMethod.IsConstant(),
-         &fOffset);      // <- no kExactMatch as that will fail
-   }
-// -- CLING WORKAROUND
 
 // CLING WORKAROUND -- The number of arguments is not always correct (e.g. when there
 //                     are default parameters, causing the callString to be wrong and
@@ -197,27 +181,8 @@ Bool_t PyROOT::TMethodHolder::InitCallFunc_()
          gcl,
          (Bool_t)fMethod == true ? fMethod.Name().c_str() : fClass.Name().c_str(),
          callString.c_str(),
-         fMethod.IsConstant(),
+         (Bool_t)fMethod == true ? fMethod.IsConstant() : kFALSE,
          &fOffset );     // <- no kExactMatch as that will fail
-   }
-// -- CLING WORKAROUND
-
-// CLING WORKAROUND -- (Actually, this may be a feature rather than workaround: the
-//                     question is whether this should live in TClass or here.)
-//                     For some reason this code does not work (crashes) for several
-//                     vector types (but not all) from "cintdlls", so skip on int.
-//                     Note that vector<double> is instantiated at application startup.
-   if ( ! gInterpreter->CallFunc_IsValid( fMethodCall ) &&
-        fClass.Name().find( '<' ) != std::string::npos &&
-        fClass.Name().find( "int" ) == std::string::npos ) {
-      const std::string& cName = fClass.Name();
-      if ( TClassEdit::IsSTLCont( cName.c_str() ) ) {
-         gROOT->ProcessLine( (std::string("template class ") +
-            (cName.find( "std::", 0, 5 ) == std::string::npos ? "std::" : "") +
-            fClass.Name() + ";").c_str() );
-      } else {
-         gROOT->ProcessLine( ("template class " + fClass.Name() + ";").c_str() );
-      }
    }
 // -- CLING WORKAROUND
 
@@ -242,23 +207,9 @@ Bool_t PyROOT::TMethodHolder::InitCallFunc_()
 Bool_t PyROOT::TMethodHolder::InitExecutor_( TExecutor*& executor )
 {
 // install executor conform to the return type
-
-// CLING WORKAROUND -- #100728: can have received the wrong overload
-   MethodInfo_t* mi = gInterpreter->CallFunc_FactoryMethod(fMethodCall);
-   if ( gInterpreter->MethodInfo_IsValid( mi ) &&
-     /* beats me why void needs to be filtered, but it's always the wrong answer AFAICS */
-        gInterpreter->MethodInfo_TypeNormalizedName( mi ) != "void" ) {
-      executor = CreateExecutor( gInterpreter->MethodInfo_TypeNormalizedName( mi ) );
-   } else {
-//-- CLING WORKAROUND
    executor = CreateExecutor( (Bool_t)fMethod == true ?
       fMethod.TypeOf().ReturnType().Name( Rflx::QUALIFIED | Rflx::SCOPED | Rflx::FINAL )
       : fClass.Name( Rflx::SCOPED | Rflx::FINAL ) );
-// CLING WORKAROUND -- #100728:
-   }
-   gInterpreter->MethodInfo_Delete( mi );
-//-- CLING WORKAROUND
-
    if ( ! executor )
       return kFALSE;
 
@@ -656,9 +607,8 @@ PyObject* PyROOT::TMethodHolder::operator()(
    if ( derived ) {
    // reset this method's offset for the object as appropriate
       TClass* base = (TClass*)fClass.Id();
-      if ( derived != base )
-         fOffset = Utility::GetObjectOffset( derived->GetName(), base->GetClassInfo(), object );
-      else fOffset = 0;
+      fOffset = Utility::GetObjectOffset(
+         derived->GetClassInfo(), base->GetClassInfo(), object );
    }
 
 // actual call; recycle self instead of returning new object for same address objects

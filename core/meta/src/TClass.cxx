@@ -40,6 +40,7 @@
 #include "TDataType.h"
 #include "TError.h"
 #include "TExMap.h"
+#include "TFunctionTemplate.h"
 #include "THashList.h"
 #include "TInterpreter.h"
 #include "TMemberInspector.h"
@@ -74,6 +75,9 @@
 #include <typeinfo>
 #include <cmath>
 #include <assert.h>
+
+#include "TListOfFunctions.h"
+#include "TViewPubFunctions.h"
 
 using namespace std;
 
@@ -771,8 +775,8 @@ ClassImp(TClass)
 TClass::TClass() :
    TDictionary(),
    fStreamerInfo(0), fConversionStreamerInfo(0), fRealData(0),
-   fBase(0), fData(0), fEnums(0), fMethod(0), fAllPubData(0), fAllPubMethod(0),
-   fClassMenuList(0),
+   fBase(0), fData(0), fEnums(0), fFuncTemplate(0), fMethod(0), fAllPubData(0),
+   fAllPubMethod(0), fClassMenuList(0),
    fDeclFileName(""), fImplFileName(""), fDeclFileLine(0), fImplFileLine(0),
    fInstanceCount(0), fOnHeap(0),
    fCheckSum(0), fCollectionProxy(0), fClassVersion(0), fClassInfo(0),
@@ -797,8 +801,8 @@ TClass::TClass() :
 TClass::TClass(const char *name, Bool_t silent) :
    TDictionary(name),
    fStreamerInfo(0), fConversionStreamerInfo(0), fRealData(0),
-   fBase(0), fData(0), fEnums(0), fMethod(0), fAllPubData(0), fAllPubMethod(0),
-   fClassMenuList(0),
+   fBase(0), fData(0), fEnums(0), fFuncTemplate(0), fMethod(0), fAllPubData(0),
+   fAllPubMethod(0), fClassMenuList(0),
    fDeclFileName(""), fImplFileName(""), fDeclFileLine(0), fImplFileLine(0),
    fInstanceCount(0), fOnHeap(0),
    fCheckSum(0), fCollectionProxy(0), fClassVersion(0), fClassInfo(0),
@@ -846,8 +850,8 @@ TClass::TClass(const char *name, Version_t cversion,
                const char *dfil, const char *ifil, Int_t dl, Int_t il, Bool_t silent) :
    TDictionary(name),
    fStreamerInfo(0), fConversionStreamerInfo(0), fRealData(0),
-   fBase(0), fData(0), fEnums(0), fMethod(0), fAllPubData(0), fAllPubMethod(0),
-   fClassMenuList(0),
+   fBase(0), fData(0), fEnums(0), fFuncTemplate(0), fMethod(0), fAllPubData(0),
+   fAllPubMethod(0), fClassMenuList(0),
    fDeclFileName(""), fImplFileName(""), fDeclFileLine(0), fImplFileLine(0),
    fInstanceCount(0), fOnHeap(0),
    fCheckSum(0), fCollectionProxy(0), fClassVersion(0), fClassInfo(0),
@@ -875,7 +879,8 @@ TClass::TClass(const char *name, Version_t cversion,
                Bool_t silent) :
    TDictionary(name),
    fStreamerInfo(0), fConversionStreamerInfo(0), fRealData(0),
-   fBase(0), fData(0), fEnums(0), fMethod(0), fAllPubData(0), fAllPubMethod(0),
+   fBase(0), fData(0), fEnums(0), fFuncTemplate(0), fMethod(0), fAllPubData(0),
+   fAllPubMethod(0),
    fClassMenuList(0),
    fDeclFileName(""), fImplFileName(""), fDeclFileLine(0), fImplFileLine(0),
    fInstanceCount(0), fOnHeap(0),
@@ -1130,6 +1135,7 @@ TClass::TClass(const TClass& cl) :
   fBase(cl.fBase),
   fData(cl.fData),
   fEnums(cl.fEnums),
+  fFuncTemplate(cl.fFuncTemplate),
   fMethod(cl.fMethod),
   fAllPubData(cl.fAllPubData),
   fAllPubMethod(cl.fAllPubMethod),
@@ -1235,6 +1241,10 @@ TClass::~TClass()
    if (fEnums)
       fEnums->Delete();
    delete fEnums; fEnums = 0;
+
+   if (fFuncTemplate)
+      fFuncTemplate->Delete();
+   delete fFuncTemplate; fFuncTemplate = 0;
 
    if (fMethod)
       fMethod->Delete();
@@ -2528,13 +2538,14 @@ TClass *TClass::GetClass(const char *name, Bool_t load, Bool_t silent)
       if (splitname.IsSTLCont()) {
 
          TClassRef clref = cl;
-         const char * itypename = gCling->GetInterpreterTypeName(name);
+         std::string itypename;
+         gCling->GetInterpreterTypeName(name,itypename);
          // Protect again possible library loading
          if (clref->IsLoaded()) {
             return clref;
          }
-         if (itypename) {
-            std::string altname( TClassEdit::ShortType(itypename, TClassEdit::kDropStlDefault) );
+         if (itypename.length()) {
+            std::string altname( TClassEdit::ShortType(itypename.c_str(), TClassEdit::kDropStlDefault) );
             if (altname != name) {
 
                // Remove the existing (soon to be invalid) TClass object to
@@ -2623,15 +2634,10 @@ TClass *TClass::GetClass(const char *name, Bool_t load, Bool_t silent)
       return 0; // reject long longs
 
    //last attempt. Look in CINT list of all (compiled+interpreted) classes
-
-   // CheckClassInfo might modify the content of its parameter if it is
-   // a template and has extra or missing space (eg. one<two<tree>> becomes
-   // one<two<three> >
-   Int_t nch = strlen(name)*2;
-   char *modifiable_name = new char[nch];
-   strlcpy(modifiable_name,name,nch);
-   if (gInterpreter->CheckClassInfo(modifiable_name)) {
-      const char *altname = gInterpreter->GetInterpreterTypeName(modifiable_name,kTRUE);
+   if (gInterpreter->CheckClassInfo(name)) {
+      std::string alternative;
+      gInterpreter->GetInterpreterTypeName(name,alternative,kTRUE);
+      const char *altname = alternative.c_str();
       if ( strncmp(altname,"std::",5)==0 ) {
          // Don't add std::, we almost always remove it.
          altname += 5;
@@ -2639,17 +2645,14 @@ TClass *TClass::GetClass(const char *name, Bool_t load, Bool_t silent)
       if (strcmp(altname,name)!=0) {
          // altname now contains the full name of the class including a possible
          // namespace if there has been a using namespace statement.
-         delete [] modifiable_name;
          return GetClass(altname,load);
       }
       TClass *ncl = gInterpreter->GenerateTClass(name, /* emulation = */ kFALSE, silent);
       if (!ncl->IsZombie()) {
-         delete [] modifiable_name;
          return ncl;
       }
       delete ncl;
    }
-   delete [] modifiable_name;
    return 0;
 }
 
@@ -2948,6 +2951,26 @@ TRealData* TClass::GetRealData(const char* name) const
 }
 
 //______________________________________________________________________________
+TFunctionTemplate *TClass::GetFunctionTemplate(const char *name)
+{
+   if (!gInterpreter || !fClassInfo) return 0;
+
+   // The following
+   if (!fFuncTemplate) fFuncTemplate = new TList();
+
+   TFunctionTemplate *result;
+   result = (TFunctionTemplate*)fFuncTemplate->FindObject(name);
+   if (!result) {
+      DeclId_t id = gInterpreter->GetFunctionTemplate(fClassInfo,name);
+      if (id) {
+         FuncTempInfo_t *info = gInterpreter->FuncTempInfo_Factory(id);
+         result = new TFunctionTemplate(info);
+      }
+   }
+   return result;
+}
+
+//______________________________________________________________________________
 const char *TClass::GetSharedLibs()
 {
    // Get the list of shared libraries containing the code for class cls.
@@ -3020,32 +3043,21 @@ TList *TClass::GetListOfDataMembers()
 }
 
 //______________________________________________________________________________
-TList *TClass::GetListOfMethods()
+TList *TClass::GetListOfMethods(Bool_t load /* = kTRUE */)
 {
    // Return list containing the TMethods of a class.
+   // If load is true, the list is populated with all the defined function
+   // and currently instantiated function template.
 
    R__LOCKGUARD(gInterpreterMutex);
-   if (!fClassInfo) {
-      if (!fMethod) fMethod = new THashList;
-      return fMethod;
-   }
 
-   if (!fMethod) {
-      if (!gInterpreter)
-         Fatal("GetListOfMethods", "gInterpreter not initialized");
-
-      TMmallocDescTemp setreset;
-      gInterpreter->CreateListOfMethods(this);
-   } else {
-      // This routine is now called on demand whenever TCling notices
-      // a change in the class or namespace.
-      // gInterpreter->UpdateListOfMethods(this);
-   }
+   if (!fMethod) fMethod = new TListOfFunctions(this);
+   if (load) fMethod->Load();
    return fMethod;
 }
 
 //______________________________________________________________________________
-TList *TClass::GetListOfAllPublicMethods()
+const TList *TClass::GetListOfAllPublicMethods(Bool_t load /* = kTRUE */)
 {
    // Returns a list of all public methods of this class and its base classes.
    // Refers to a subset of the methods in GetListOfMethods() so don't do
@@ -3059,37 +3071,9 @@ TList *TClass::GetListOfAllPublicMethods()
    //   protected methods.
 
    R__LOCKGUARD(gInterpreterMutex);
-   if (!fAllPubMethod) {
-      // This would delete fAllPubMethod if the list of methods
-      // has not been created yet.
-      TList *allMethod = GetListOfMethods();
 
-      fAllPubMethod = new TList;
-
-      // put all methods in the list
-      fAllPubMethod->AddAll(allMethod);
-
-      // loop over all base classes and add new methods
-      TIter nextBaseClass(GetListOfBases());
-      TBaseClass *pB;
-      TMethod    *p;
-      while ((pB = (TBaseClass*) nextBaseClass())) {
-         if (!pB->GetClassPointer()) continue;
-         if (!(pB->Property() & kIsPublic)) continue;
-         TIter next(pB->GetClassPointer()->GetListOfAllPublicMethods());
-         TList temp;
-         while ((p = (TMethod*) next()))
-            if (!fAllPubMethod->Contains(p->GetName()))
-               temp.Add(p);
-         fAllPubMethod->AddAll(&temp);
-         temp.Clear();
-      }
-
-      // loop over list and remove all non-public methods
-      TIter next(fAllPubMethod);
-      while ((p = (TMethod*) next()))
-         if (!(p->Property() & kIsPublic)) fAllPubMethod->Remove(p);
-   }
+   if (!fAllPubMethod) fAllPubMethod = new TViewPubFunctions(this);
+   if (load) fAllPubMethod->Load();
    return fAllPubMethod;
 }
 
@@ -3262,8 +3246,7 @@ void TClass::ResetCaches()
    // To clean out all caches.
 
    // Not owning lists, don't call Delete()
-   delete fAllPubData;     fAllPubData  =0;
-   delete fAllPubMethod;   fAllPubMethod=0;
+   delete fAllPubData; fAllPubData = 0;
 
    if (fBase)
       fBase->Delete();
@@ -3276,10 +3259,6 @@ void TClass::ResetCaches()
    if (fEnums)
       fEnums->Delete();
    delete fEnums;   fEnums = 0;
-
-   if (fMethod)
-      fMethod->Delete();
-   delete fMethod;   fMethod=0;
 
    if (fRealData)
       fRealData->Delete();
@@ -3394,12 +3373,26 @@ TList *TClass::GetMenuList() const {
    return fClassMenuList;
 }
 
+//______________________________________________________________________________
+TListOfFunctions *TClass::GetMethodList()
+{
+   // Return (create an empty one if needed) the list of functions.
+   // The major difference with GetListOfMethod is that this returns
+   // the internal type of fMethod and thus can not be made public.
+   // It also never 'loads' the content of the list.
+   
+   if (!fMethod) fMethod = new TListOfFunctions(this);
+   return fMethod;
+}
+
 
 //______________________________________________________________________________
 TMethod *TClass::GetMethodAny(const char *method)
 {
    // Return pointer to method without looking at parameters.
    // Does not look in (possible) base classes.
+   // Has the side effect of loading all the TMethod object in the list
+   // of the class.
 
    if (!fClassInfo) return 0;
    return (TMethod*) GetListOfMethods()->FindObject(method);
@@ -3444,43 +3437,23 @@ TMethod *TClass::GetMethod(const char *method, const char *params,
    if (!gInterpreter)
       Fatal("GetMethod", "gInterpreter not initialized");
 
-   Long_t faddr = (Long_t)gInterpreter->GetInterfaceMethod(this, method,
-                                                           params, objectIsConst);
-   if (!faddr) return 0;
-
-   // loop over all methods in this class (and its baseclasses) till
-   // we find a TMethod with the same faddr
-
-
-   TMethod *m;
-
-#if defined(R__WIN32)
-   // On windows CINT G__exec_bytecode can (seemingly) have several values :(
-   // So we can not easily determine whether something is interpreted or
-   // so the optimization of not looking at the mangled name can not be
-   // used
-   m = GetClassMethod(method,params,objectIsConst);
-
-#else
-   if (faddr == (Long_t)gCling->GetExecByteCode()) {
-      // the method is actually interpreted, its address is
-      // not a discriminant (it always point to the same
-      // function pointed by CINT G__exec_bytecode.
-      m = GetClassMethod(method,params,objectIsConst);
-   } else {
-      m = GetClassMethod(faddr);
-   }
-#endif
-
-   if (m) return m;
-
+   TInterpreter::DeclId_t decl = gInterpreter->GetFunctionWithValues(fClassInfo,
+                                                                     method, params,
+                                                                     objectIsConst);
+   
+   if (!decl) return 0;
+   
+   TFunction *f = GetMethodList()->Get(decl);
+   if (f) return (TMethod*)f;
+   
+   
    TBaseClass *base;
    TIter       next(GetListOfBases());
    while ((base = (TBaseClass *) next())) {
       TClass *c = base->GetClassPointer();
       if (c) {
-         m = c->GetMethod(method,params,objectIsConst);
-         if (m) return m;
+         f = c->GetMethodList()->Get(decl);
+         if (f) return (TMethod*)f;
       }
    }
    Error("GetMethod",
@@ -3500,30 +3473,30 @@ TMethod *TClass::GetMethodWithPrototype(const char *method, const char *proto,
    if (!fClassInfo) return 0;
 
    if (!gInterpreter)
-      Fatal("GetMethod", "gInterpreter not initialized");
+      Fatal("GetMethodWithPrototype", "gInterpreter not initialized");
 
-   Long_t faddr = (Long_t)gInterpreter->GetInterfaceMethodWithPrototype(this,
-                                                               method, proto,
-                                                                        objectIsConst,
-                                                                        mode);
-   if (!faddr) return 0;
-
-   // loop over all methods in this class (and its baseclasses) till
-   // we find a TMethod with the same faddr
-
-   TMethod *m = GetClassMethod(faddr);
-   if (m) return m;
-
+   TInterpreter::DeclId_t decl = gInterpreter->GetFunctionWithPrototype(fClassInfo,
+                                                                  method, proto,
+                                                            objectIsConst, mode);
+   
+   if (!decl) return 0;
+   
+   TFunction *f = GetMethodList()->Get(decl);
+   if (f) return (TMethod*)f;
+   
+   
    TBaseClass *base;
    TIter       next(GetListOfBases());
    while ((base = (TBaseClass *) next())) {
       TClass *c = base->GetClassPointer();
       if (c) {
-         m = c->GetMethodWithPrototype(method,proto,objectIsConst, mode);
-         if (m) return m;
+         f = c->GetMethodList()->Get(decl);
+         if (f) return (TMethod*)f;
       }
    }
-   Error("GetMethod", "Did not find matching TMethod (should never happen)");
+   Error("GetMethodWithPrototype",
+         "\nDid not find matching TMethod <%s> with \"%s\" %sfor %s",
+         method,proto,objectIsConst ? "const " : "", GetName());
    return 0;
 }
 
@@ -3555,29 +3528,18 @@ TMethod *TClass::GetClassMethod(const char *name, const char* params,
 
    if (!fClassInfo) return 0;
 
-   // Need to go through those loops to get the signature from
-   // the valued params (i.e. from "1.0,3" to "double,int")
+   if (!gInterpreter)
+      Fatal("GetClassMethod", "gInterpreter not initialized");
 
-   TList* bucketForMethod = ((THashList*)GetListOfMethods())->GetListForObject(name);
-   if (bucketForMethod) {
-      R__LOCKGUARD2(gInterpreterMutex);
-      CallFunc_t  *func = gCling->CallFunc_Factory();
-      Long_t       offset;
-      gCling->CallFunc_SetFunc(func,GetClassInfo(), name, params, objectIsConst, &offset);
-      MethodInfo_t *info = gCling->CallFunc_FactoryMethod(func);
-      TMethod request(info,this);
-      TMethod *m;
-      TIter    next(bucketForMethod);
-      while ((m = (TMethod *) next())) {
-         if (!strcmp(name,m->GetName())
-             &&!strcmp(request.GetSignature(),m->GetSignature())) {
-            gCling->CallFunc_Delete(func);
-            return m;
-         }
-      }
-      gCling->CallFunc_Delete(func);
-   }
-   return 0;
+   TInterpreter::DeclId_t decl = gInterpreter->GetFunctionWithValues(fClassInfo,
+                                                                     name, params,
+                                                                     objectIsConst);
+   
+   if (!decl) return 0;
+   
+   TFunction *f = GetMethodList()->Get(decl);
+   
+   return (TMethod*)f; // Could be zero if the decl is actually in a base class.
 }
 
 //______________________________________________________________________________
@@ -3585,36 +3547,25 @@ TMethod *TClass::GetClassMethodWithPrototype(const char *name, const char* proto
                                              Bool_t objectIsConst /* = kFALSE */,
                       ROOT::EFunctionMatchMode mode /* = ROOT::kConversionMatch */)
 {
-   // Look for a method in this class that has the name and matches the parameters.
-   // The params string must contain argument values, like "3189, \"aap\", 1.3".
-   // Returns 0 in case method is not found.
+   // Find the method with a given prototype. The proto string must be of the
+   // form: "char*,int,double". Returns 0 in case method is not found.
    // See TClass::GetMethodWithPrototype to also search the base classes.
 
    if (!fClassInfo) return 0;
 
-   // Need to go through those loops to get the signature from
-   // the valued params (i.e. from "1.0,3" to "double,int")
-
-   TList* bucketForMethod = ((THashList*)GetListOfMethods())->GetListForObject(name);
-   if (bucketForMethod) {
-      R__LOCKGUARD2(gInterpreterMutex);
-      CallFunc_t  *func = gCling->CallFunc_Factory();
-      Long_t       offset;
-      gCling->CallFunc_SetFuncProto(func,GetClassInfo(), name, proto, objectIsConst, &offset, mode);
-      MethodInfo_t *info = gCling->CallFunc_FactoryMethod(func);
-      TMethod request(info,this);
-      TMethod *m;
-      TIter    next(bucketForMethod);
-      while ((m = (TMethod *) next())) {
-         if (!strcmp(name,m->GetName())
-             &&!strcmp(request.GetSignature(),m->GetSignature())) {
-            gCling->CallFunc_Delete(func);
-            return m;
-         }
-      }
-      gCling->CallFunc_Delete(func);
-   }
-   return 0;
+   if (!gInterpreter)
+      Fatal("GetClassMethodWithPrototype", "gInterpreter not initialized");
+   
+   TInterpreter::DeclId_t decl = gInterpreter->GetFunctionWithPrototype(fClassInfo,
+                                                                        name, proto,
+                                                                        objectIsConst,
+                                                                        mode);
+   
+   if (!decl) return 0;
+   
+   TFunction *f = GetMethodList()->Get(decl);
+   
+   return (TMethod*)f; // Could be zero if the decl is actually in a base class.
 }
 
 //______________________________________________________________________________
@@ -3639,6 +3590,9 @@ Int_t TClass::GetNmethods()
    // Return the number of methods of this class
    // Note that in case the list of methods is not yet created, it will be done
    // by GetListOfMethods().
+   // This will also load/populate the list of methods, to get 'just' the
+   // number of currently loaded methods use:
+   //    cl->GetListOfMethods(false)->GetSize();
 
    if (!fClassInfo) return 0;
 
@@ -4907,9 +4861,7 @@ void TClass::SetUnloaded()
    fTypeInfo     = 0;
 
    if (fMethod) {
-      fMethod->Delete();
-      delete fMethod;
-      fMethod=0;
+      fMethod->Unload();
    }
 
    SetBit(kUnloaded);

@@ -16,6 +16,7 @@ namespace clang {
   class Decl;
   class Expr;
   class FunctionDecl;
+  class FunctionTemplateDecl;
   class Parser;
   class QualType;
   class Type;
@@ -73,6 +74,35 @@ namespace cling {
     ///
     const clang::ClassTemplateDecl* findClassTemplate(llvm::StringRef Name) const;
 
+
+    ///\brief Lookup a function template based on its Decl(Context), name.
+    ///
+    ///\param [in] scopeDecl - the scope (namespace or tag) that is searched for
+    ///   the function.
+    ///\param [in] templateName  - the name of the function template to find.
+    ///\param [in] objectIsConst - if true search fo function that can
+    ///   be called on a const object ; default to false.
+    ///\returns The function template found or null.
+    const clang::FunctionTemplateDecl* findFunctionTemplate(
+                                                   const clang::Decl* scopeDecl,
+                                                   llvm::StringRef templateName,
+                                                      bool objectIsConst = false
+                                                            ) const;
+
+
+    ///\brief Lookup a function based on its Decl(Context), name (return any
+    ///function that matches the name (and constness if requested).
+    ///
+    ///\param [in] scopeDecl - the scope (namespace or tag) that is searched for
+    ///   the function.
+    ///\param [in] funcName  - the name of the function to find.
+    ///\param [in] objectIsConst - if true search fo function that can
+    ///   be called on a const object ; default to false.
+    ///\returns The function found or null.
+    const clang::FunctionDecl* findAnyFunction(const clang::Decl* scopeDecl,
+                                               llvm::StringRef funcName,
+                                               bool objectIsConst = false
+                                               ) const;
 
     ///\brief Lookup a function based on its Decl(Context), name and parameters.
     ///

@@ -53,6 +53,9 @@ class TMethodCall;
 class TVirtualIsAProxy;
 class TVirtualRefProxy;
 class THashTable;
+class TListOfFunctions;
+class TViewPubFunctions;
+class TFunctionTemplate;
 
 namespace clang {
    class Decl;
@@ -95,9 +98,10 @@ private:
    TList             *fBase;            //linked list for base classes
    TList             *fData;            //linked list for data members
    TList             *fEnums;           //linked list for the enums
-   TList             *fMethod;          //linked list for methods
+   TList             *fFuncTemplate;    //linked list for function templates [Not public until implemented as active list]
+   TListOfFunctions  *fMethod;          //linked list for methods
    TList             *fAllPubData;      //all public data members (including from base classes)
-   TList             *fAllPubMethod;    //all public methods (including from base classes)
+   TViewPubFunctions *fAllPubMethod;    //all public methods (including from base classes)
    mutable TList     *fClassMenuList;   //list of class menu items
 
    const char        *fDeclFileName;    //name of class declaration file
@@ -148,9 +152,8 @@ private:
    typedef void (TClass::*StreamerImpl_t)(void *obj, TBuffer &b, const TClass *onfile_class) const;
    mutable StreamerImpl_t fStreamerImpl;//! Pointer to the function implementing the right streaming behavior for the class represented by this object.
 
+   TListOfFunctions  *GetMethodList();
    TMethod           *GetClassMethod(Long_t faddr);
-   TMethod           *GetClassMethod(const char *name, const char *params, Bool_t objectIsConst = kFALSE);
-   TMethod           *GetClassMethodWithPrototype(const char *name, const char *proto, Bool_t objectIsConst = kFALSE, ROOT::EFunctionMatchMode mode = ROOT::kConversionMatch);
    Int_t              GetBaseClassOffsetRecurse(const TClass *base);
    void Init(const char *name, Version_t cversion, const type_info *info,
              TVirtualIsAProxy *isa, ShowMembersFunc_t showmember,
@@ -255,6 +258,8 @@ public:
    UInt_t             GetCheckSum(UInt_t code=0) const;
    TVirtualCollectionProxy *GetCollectionProxy() const;
    TVirtualIsAProxy  *GetIsAProxy() const;
+   TMethod           *GetClassMethod(const char *name, const char *params, Bool_t objectIsConst = kFALSE);
+   TMethod           *GetClassMethodWithPrototype(const char *name, const char *proto, Bool_t objectIsConst = kFALSE, ROOT::EFunctionMatchMode mode = ROOT::kConversionMatch);
    Version_t          GetClassVersion() const { fVersionUsed = kTRUE; return fClassVersion; }
    Int_t              GetClassSize() const { return Size(); }
    TDataMember       *GetDataMember(const char *datamember) const;
@@ -273,9 +278,9 @@ public:
    TList             *GetListOfDataMembers();
    TList             *GetListOfEnums();
    TList             *GetListOfBases();
-   TList             *GetListOfMethods();
+   TList             *GetListOfMethods(Bool_t load = kTRUE);
    TList             *GetListOfRealData() const { return fRealData; }
-   TList             *GetListOfAllPublicMethods();
+   const TList       *GetListOfAllPublicMethods(Bool_t load = kTRUE);
    TList             *GetListOfAllPublicDataMembers();
    const char        *GetImplFileName() const { return fImplFileName; }
    Short_t            GetImplFileLine() const { return fImplFileLine; }
@@ -285,6 +290,7 @@ public:
    Int_t              GetBaseClassOffset(const TClass *base, void *address = 0);
    TClass            *GetBaseDataMember(const char *datamember);
    ROOT::DirAutoAdd_t GetDirectoryAutoAdd() const;
+   TFunctionTemplate *GetFunctionTemplate(const char *name);
    UInt_t             GetInstanceCount() const { return fInstanceCount; }
    UInt_t             GetHeapInstanceCount() const { return fOnHeap; }
    void               GetMenuItems(TList *listitems);

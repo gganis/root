@@ -32,13 +32,16 @@
 #include "TClingTypeInfo.h"
 #include "TError.h"
 #include "TMetaUtils.h"
+#include "TCling.h"
 
 #include "cling/Interpreter/Interpreter.h"
+#include "cling/Utils/AST.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/GlobalDecl.h"
 #include "clang/AST/Mangle.h"
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/Type.h"
@@ -129,6 +132,14 @@ TClingMethodInfo::TClingMethodInfo(cling::Interpreter *interp,
 TClingMethodInfo::~TClingMethodInfo()
 {
    delete fTemplateSpecIter;
+}
+
+TDictionary::DeclId_t TClingMethodInfo::GetDeclId() const
+{
+   if (!IsValid()) {
+      return TDictionary::DeclId_t();
+   }
+   return (const clang::Decl*)(GetMethodDecl()->getCanonicalDecl()); 
 }
 
 const clang::FunctionDecl *TClingMethodInfo::GetMethodDecl() const
@@ -436,15 +447,23 @@ TClingTypeInfo *TClingMethodInfo::Type() const
    return &ti;
 }
 
-const char *TClingMethodInfo::GetMangledName() const
+std::string TClingMethodInfo::GetMangledName() const
 {
    if (!IsValid()) {
-      return 0;
+      return "";
    }
-   static std::string mangled_name;
+   std::string mangled_name;
    mangled_name.clear();
-   fInterp->maybeMangleDeclName(GetMethodDecl(),mangled_name);
-   return mangled_name.c_str();
+   const FunctionDecl* D = GetMethodDecl();
+   GlobalDecl GD;
+   if (const CXXConstructorDecl* Ctor = dyn_cast<CXXConstructorDecl>(D))
+     GD = GlobalDecl(Ctor, Ctor_Complete);
+   else if (const CXXDestructorDecl* Dtor = dyn_cast<CXXDestructorDecl>(D))
+     GD = GlobalDecl(Dtor, Dtor_Deleting);
+   else
+     GD = GlobalDecl(D);
+   cling::utils::Analyze::maybeMangleDeclName(GD, mangled_name);
+   return mangled_name;
 }
 
 const char *TClingMethodInfo::GetPrototype(const ROOT::TMetaUtils::TNormalizedCtxt &normCtxt) const
@@ -500,46 +519,13 @@ const char *TClingMethodInfo::GetPrototype(const ROOT::TMetaUtils::TNormalizedCt
    return buf.c_str();
 }
 
-static void ConstructorName(std::string &name, const clang::FunctionDecl *decl,
-                            cling::Interpreter &interp,
-                            const ROOT::TMetaUtils::TNormalizedCtxt &normCtxt)
-{
-   const clang::TypeDecl* td = llvm::dyn_cast<clang::TypeDecl>(decl->getDeclContext());
-   if (!td) return;
-
-   clang::QualType qualType(td->getTypeForDecl(),0);
-   ROOT::TMetaUtils::GetNormalizedName(name, qualType, interp, normCtxt);
-   unsigned int level = 0;
-   for(size_t cursor = name.length()-1; cursor != 0; --cursor) {
-      if (name[cursor] == '>') ++level;
-      else if (name[cursor] == '<' && level) --level;
-      else if (level == 0 && name[cursor] == ':') {
-         name.erase(0,cursor+1);
-         break;
-      }
-   }
-}
-
 const char *TClingMethodInfo::Name(const ROOT::TMetaUtils::TNormalizedCtxt &normCtxt) const
 {
    if (!IsValid()) {
       return 0;
    }
    static std::string buf;
-   buf.clear();
-   const clang::FunctionDecl *decl = GetMethodDecl();
-   if (llvm::isa<clang::CXXConstructorDecl>(decl))
-   {
-      ConstructorName(buf, decl, *fInterp, normCtxt);
-      
-   } else if (llvm::isa<clang::CXXDestructorDecl>(decl))
-   {
-      ConstructorName(buf, decl, *fInterp, normCtxt);
-      buf.insert(buf.begin(), '~');
-   } else {
-      llvm::raw_string_ostream stream(buf);
-      decl->getNameForDiagnostic(stream, decl->getASTContext().getPrintingPolicy(), /*Qualified=*/false);
-   }
+   ((TCling*)gCling)->GetFunctionName(GetMethodDecl(),buf);
    return buf.c_str();
 }
 
@@ -566,16 +552,20 @@ const char *TClingMethodInfo::Title()
 
    // Iterate over the redeclarations, we can have muliple definitions in the 
    // redecl chain (came from merging of pcms).
-   if (const FunctionDecl *FD = llvm::dyn_cast<FunctionDecl>(GetMethodDecl())) {
-      if ( (FD = ROOT::TMetaUtils::GetAnnotatedRedeclarable(FD)) ) {
-         if (AnnotateAttr *A = FD->getAttr<AnnotateAttr>()) {
-            fTitle = A->getAnnotation().str();
-            return fTitle.c_str();
-         }
+   const FunctionDecl *FD = GetMethodDecl();
+   if (const FunctionDecl *AnnotFD
+       = ROOT::TMetaUtils::GetAnnotatedRedeclarable(FD)) {
+      if (AnnotateAttr *A = AnnotFD->getAttr<AnnotateAttr>()) {
+         fTitle = A->getAnnotation().str();
+         return fTitle.c_str();
       }
    }
-   // Try to get the comment from the header file if present
-   fTitle = ROOT::TMetaUtils::GetComment(*GetMethodDecl()).str();
+   if (!FD->isFromASTFile()) {
+      // Try to get the comment from the header file if present
+      // but not for decls from AST file, where rootcling would have
+      // created an annotation
+      fTitle = ROOT::TMetaUtils::GetComment(*FD).str();
+   }
 
    return fTitle.c_str();
 }

@@ -63,9 +63,9 @@ namespace cling {
     m_IsQuitRequested = true;
   }
 
-  MetaSema::ActionResult MetaSema::actOnUCommand() const {
+  MetaSema::ActionResult MetaSema::actOnUCommand(unsigned value /*=1*/) const {
      // FIXME: unload, once implemented, must return success / failure
-     m_Interpreter.unload();
+     m_Interpreter.unload(value);
      return AR_Success;
   }
 

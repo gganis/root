@@ -71,10 +71,36 @@ Bool_t PyROOT::T##name##Converter::ToMemory( PyObject*, void* )               \
    return kFALSE;                                                             \
 }
 
-#define PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( name, type, F1 )          \
+static inline Bool_t VerifyPyBool( PyObject* pyobject )
+{
+   Long_t l = PyLong_AsLong( pyobject );
+   if ( ! ( l == 0 || l == 1 ) ) {
+      PyErr_SetString( PyExc_TypeError, "boolean value should be bool, or integer 1 or 0" );
+      return kFALSE;
+   }
+   return kTRUE;
+}
+
+static inline Bool_t VerifyPyLong( PyObject* pyobject )
+{
+#if PY_VERSION_HEX >= 0x02070000
+// p2.7 silently converts floats to long ...
+   if ( ! (PyLong_Check( pyobject ) || PyInt_Check( pyobject )) )
+      return kFALSE;
+#endif
+   return kTRUE;
+}
+
+static inline Bool_t VerifyPyFloat( PyObject* )
+{
+   return kTRUE;
+}
+
+#define PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( name, type, F1, verifier )\
 Bool_t PyROOT::TConst##name##RefConverter::SetArg(                            \
       PyObject* pyobject, TParameter_t& /* para */, CallFunc_t* func, Long_t )\
 {                                                                             \
+   if ( ! verifier( pyobject ) ) return kFALSE;                               \
    fBuffer = (type)F1( pyobject );                                            \
    if ( fBuffer == (type)-1 && PyErr_Occurred() )                             \
       return kFALSE;                                                          \
@@ -152,9 +178,7 @@ Bool_t PyROOT::TLongConverter::SetArg(
 {
 // convert <pyobject> to C++ long, set arg for call
 #if PY_VERSION_HEX >= 0x02070000
-// p2.7 silently converts floats to long ...
-   if ( ! (PyLong_Check( pyobject ) || PyInt_Check( pyobject )) )
-      return kFALSE;
+   if ( ! VerifyPyLong( pyobject ) ) return kFALSE;
 #endif
    para.fLong = PyLong_AsLong( pyobject );
    if ( para.fLong == -1 && PyErr_Occurred() )
@@ -191,15 +215,15 @@ Bool_t PyROOT::TLongRefConverter::SetArg(
 PYROOT_IMPLEMENT_BASIC_REF_CONVERTER( LongRef )
 
 //____________________________________________________________________________
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Bool,      Bool_t,    PyInt_AsLong )
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Short,     Short_t,   PyInt_AsLong )
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( UShort,    UShort_t,  PyInt_AsLong )
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Int,       Int_t,     PyInt_AsLong )
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( UInt,      UInt_t,    PyLongOrInt_AsULong )
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Long,      Long_t,    PyLong_AsLong )
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( ULong,     ULong_t,   PyLongOrInt_AsULong )
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( LongLong,  Long64_t,  PyLong_AsLongLong )
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( ULongLong, ULong64_t, PyLongOrInt_AsULong64 )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Bool,      Bool_t,    PyInt_AsLong, VerifyPyBool )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Short,     Short_t,   PyInt_AsLong, VerifyPyLong )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( UShort,    UShort_t,  PyInt_AsLong, VerifyPyLong )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Int,       Int_t,     PyInt_AsLong, VerifyPyLong )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( UInt,      UInt_t,    PyLongOrInt_AsULong,   VerifyPyLong )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Long,      Long_t,    PyLong_AsLong,         VerifyPyLong )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( ULong,     ULong_t,   PyLongOrInt_AsULong,   VerifyPyLong )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( LongLong,  Long64_t,  PyLong_AsLongLong,     VerifyPyLong )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( ULongLong, ULong64_t, PyLongOrInt_AsULong64, VerifyPyLong )
 
 //____________________________________________________________________________
 Bool_t PyROOT::TIntRefConverter::SetArg(
@@ -237,12 +261,8 @@ Bool_t PyROOT::TBoolConverter::SetArg(
       PyObject* pyobject, TParameter_t& para, CallFunc_t* func, Long_t )
 {
 // convert <pyobject> to C++ bool, allow int/long -> bool, set arg for call
+   if ( ! VerifyPyBool( pyobject ) ) return kFALSE;
    para.fLong = PyLong_AsLong( pyobject );
-   if ( ! ( para.fLong == 0 || para.fLong == 1 ) ) {
-      PyErr_SetString( PyExc_TypeError, "boolean value should be bool, or integer 1 or 0" );
-      return kFALSE;
-   }
-
    if ( func )
       gInterpreter->CallFunc_SetArg( func,  para.fLong );
    return kTRUE;
@@ -355,8 +375,8 @@ Bool_t PyROOT::TDoubleRefConverter::SetArg(
 PYROOT_IMPLEMENT_BASIC_REF_CONVERTER( DoubleRef )
 
 //____________________________________________________________________________
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Float,  Float_t,  PyFloat_AsDouble )
-PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Double, Double_t, PyFloat_AsDouble )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Float,  Float_t,  PyFloat_AsDouble, VerifyPyFloat )
+PYROOT_IMPLEMENT_BASIC_CONST_REF_CONVERTER( Double, Double_t, PyFloat_AsDouble, VerifyPyFloat )
 
 //____________________________________________________________________________
 Bool_t PyROOT::TVoidConverter::SetArg( PyObject*, TParameter_t&, CallFunc_t*, Long_t )
@@ -364,45 +384,6 @@ Bool_t PyROOT::TVoidConverter::SetArg( PyObject*, TParameter_t&, CallFunc_t*, Lo
 // can't happen (unless a type is mapped wrongly), but implemented for completeness
    PyErr_SetString( PyExc_SystemError, "void/unknown arguments can\'t be set" );
    return kFALSE;
-}
-
-//____________________________________________________________________________
-Bool_t PyROOT::TMacroConverter::SetArg( PyObject*, TParameter_t&, CallFunc_t*, Long_t )
-{
-// C++ macro's are not acceptable function args (but their values could be)
-   PyErr_SetString( PyExc_SystemError, "macro arguments can\'t be set" );
-   return kFALSE;
-}
-
-PyObject* PyROOT::TMacroConverter::FromMemory( void* /* address */ )
-{
-// no info available from ROOT/meta; go directly to CINT for the type info
-   PyErr_SetString( PyExc_TypeError, "NO MACRO SUPPORT IN CLING!" );
-/* TODO: get macro support from Cling ---
-   G__DataMemberInfo dmi;
-   while ( dmi.Next() ) {    // using G__ClassInfo().GetDataMember() would cause overwrite
-
-      if ( (Long_t)address == dmi.Offset() ) {
-      // for now, only handle int, double, and C-string
-         switch ( dmi.Type()->Type() ) {
-         case 'p':
-            return PyInt_FromLong( (Long_t) *(Int_t*)address );
-         case 'P':
-            return PyFloat_FromDouble( (double) *(Double_t*)address );
-         case 'T':
-            return PyROOT_PyUnicode_FromString( *(char**)address );
-         default:
-         // type unknown/not implemented
-            PyErr_SetString( PyExc_NotImplementedError, "macro value could not be converted" );
-            return 0;
-         }
-      }
-   }
-
-// type unknown/not implemented
-   PyErr_SetString( PyExc_AttributeError, "requested macro not found" );
---- no macro support from Cling */
-   return 0;
 }
 
 //____________________________________________________________________________
@@ -814,10 +795,8 @@ Bool_t PyROOT::TRootObjectConverter::SetArg(
 
    // calculate offset between formal and actual arguments
       para.fVoidp = pyobj->GetObject();
-      if ( fClass != pyobj->ObjectIsA() ) {
-         para.fLong += Utility::GetObjectOffset(
-            pyobj->ObjectIsA()->GetName(), fClass->GetClassInfo(), para.fVoidp );
-      }
+      para.fLong += Utility::GetObjectOffset(
+         pyobj->ObjectIsA()->GetClassInfo(), fClass->GetClassInfo(), para.fVoidp );
 
    // set pointer (may be null) and declare success
       if ( func )
@@ -919,6 +898,24 @@ Bool_t PyROOT::TRootObjectPtrConverter::ToMemory( PyObject* value, void* address
 
    return kFALSE;
 }
+
+//____________________________________________________________________________
+// CLING WORKAROUND -- classes for STL iterators are completely undefined in that
+// they come in a bazillion different guises, so just do whatever
+Bool_t PyROOT::TSTLIteratorConverter::SetArg(
+      PyObject* pyobject, TParameter_t& para, CallFunc_t* func, Long_t /* user */ )
+
+{
+   if ( ! ObjectProxy_Check( pyobject ) )
+      return kFALSE;
+
+// just set the pointer value, no check
+   ObjectProxy* pyobj = (ObjectProxy*)pyobject;
+   para.fVoidp = pyobj->GetObject();
+   if ( func ) gInterpreter->CallFunc_SetArg( func,  para.fLong );
+   return kTRUE;
+}
+// -- END CLING WORKAROUND
 
 //____________________________________________________________________________
 Bool_t PyROOT::TVoidPtrRefConverter::SetArg(
@@ -1050,6 +1047,11 @@ PyROOT::TConverter* PyROOT::CreateConverter( const std::string& fullType, Long_t
 // converters for known/ROOT classes and default (void*)
    TConverter* result = 0;
    if ( TClass* klass = TClass::GetClass( realType.c_str() ) ) {
+   // CLING WORKAROUND -- special case for STL iterators
+      if ( realType.find( "__gnu_cxx::__normal_iterator", 0 ) /* vector */ == 0 )
+         result = new TSTLIteratorConverter();
+      else
+   // -- CLING WORKAROUND
       if ( cpd == "**" || cpd == "*&" || cpd == "&*" )
          result = new TRootObjectPtrConverter( klass, control );
       else if ( cpd == "*" )
@@ -1130,7 +1132,6 @@ namespace {
    PYROOT_BASIC_CONVERTER_FACTORY( DoubleRef )
    PYROOT_BASIC_CONVERTER_FACTORY( ConstDoubleRef )
    PYROOT_BASIC_CONVERTER_FACTORY( Void )
-   PYROOT_BASIC_CONVERTER_FACTORY( Macro )
    PYROOT_BASIC_CONVERTER_FACTORY( LongLong )
    PYROOT_BASIC_CONVERTER_FACTORY( ConstLongLongRef )
    PYROOT_BASIC_CONVERTER_FACTORY( ULongLong )
@@ -1163,6 +1164,7 @@ namespace {
       NFp_t( "bool",                      &CreateBoolConverter               ),
       NFp_t( "const bool&",               &CreateConstBoolRefConverter       ),
       NFp_t( "char",                      &CreateCharConverter               ),
+      NFp_t( "signed char",               &CreateCharConverter               ),
       NFp_t( "unsigned char",             &CreateUCharConverter              ),
       NFp_t( "short",                     &CreateShortConverter              ),
       NFp_t( "const short&",              &CreateConstShortRefConverter      ),
@@ -1194,7 +1196,6 @@ namespace {
       NFp_t( "double&",                   &CreateDoubleRefConverter          ),
       NFp_t( "const double&",             &CreateConstDoubleRefConverter     ),
       NFp_t( "void",                      &CreateVoidConverter               ),
-      NFp_t( "#define",                   &CreateMacroConverter              ),
 
    // pointer/array factories
       NFp_t( "bool*",                     &CreateBoolArrayConverter          ),

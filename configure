@@ -421,6 +421,8 @@ check_libcxxcompat() {
     # The result of the check is stored in is_libcxxcompat, 1 if true,
     # 0 otherwise, which should be immediately copied, since the variable
     # will be overwritten at next invocation of this function.
+    # To skip this check, in case std types are not used in the public
+    # API of the library, set skipchecklibcxxcompat="yes".
 
     is_libcxxcompat=1
     ret=0
@@ -429,6 +431,13 @@ check_libcxxcompat() {
     if test $# -ne 1 ; then
         echo "check_libcxxcompat: not 1 argument"
         return 1
+    fi
+
+    # Can we skip the check in case library has no std C++ in public API
+    if test "x$skipchecklibcxxcompat" = "xyes"; then
+        skipchecklibcxxcompat=""
+        logmsg "check_libcxxcompat: skipping check for $1"
+        return
     fi
 
     # Save arguments in logical names
@@ -2416,17 +2425,9 @@ if test $found_comp -eq 0 ; then
 fi
 
 # the path for the gcctoolchain in case not the system gcc is used to
-# build clang/LLVM. This path is used to build clang/LLVM and is passed
-# at run-time to cling.
-setgcctoolchain="undef"
-gcctoolchainconf="/**/"
+# build clang/LLVM. This path is used to build clang/LLVM.
 if test "x$gcctoolchain" != "x"; then
-   setgcctoolchain="define"
-   gcctoolchainconf=\"$gcctoolchain\"
-   if test "x$altccset" != "x" ; then
-      gccincdirs=`echo "#include <bogus.h>" | ${altcc} -xc++ -E -v - 2>&1 >/dev/null | awk '/^#include </,/^End of search/{if (!/^#include </ && !/^End of search/){ print }}'`
-      gccincdirarr=(${gccincdirs// / })
-   else
+   if test "x$altccset" = "x" ; then
       result "`basename $0`: no alternative gcc compiler specified, incompatible with --with-gcc-toolchain option"
       exit 1
    fi
@@ -2490,6 +2491,8 @@ if test "x$enable_cxx11" = "xyes"; then
     if test $cxxopt_result -eq 0 ; then
         enable_cxx11="no"
         result "no"
+        result "`basename $0`: c++11 mode is requested but the current compiler does not support it."
+        exit 1
     else
         usecxx11="define"
         # on OS X libcxx is required for C++11 support with clang
@@ -3050,6 +3053,7 @@ if test ! "x$enable_opengl" = "xno" && test ! "x$platform" = "xwin32" ; then
         opengllib="-dylib_file /usr/X11R6/lib/libGL.dylib:/usr/X11R6/lib/libGL.dylib -lGL"
     fi
 
+    skipchecklibcxxcompat="yes"
     check_library "libGLU libMesaGLU" "$enable_shared" \
         "$keep" $opengllibdirs
     openglulib=$found_lib
@@ -6824,8 +6828,7 @@ rm -f lib/libRXML* bin/libRXML* etc/system.rootmap \
  graf3d/gl/src/G__GL.h gui/gui/src/G__Gui1.h \
  gui/gui/src/G__Gui2.h gui/gui/src/G__Gui3.h \
  graf2d/x11ttf/src/G__X11TTF.h graf2d/x11/src/G__X11.cxx \
- graf2d/postscript/src/G__PostScript.h \
- graf2d/gpad/src/G__GPad.h graf3d/x3d/src/G__X3D.h \
+ graf3d/x3d/src/G__X3D.h \
  hist/spectrumpainter/src/G__Spectrum2Painter.h \
  io/io/src/G__IO.h io/sql/src/G__SQL.h io/xml/src/G__XML.h \
  math/mathcore/src/G__Math.h math/mathcore/src/G__MathFit.h \
@@ -6850,8 +6853,7 @@ rm -f lib/libRXML* bin/libRXML* etc/system.rootmap \
  net/ldap/src/G__LDAP.cxx core/winnt/src/G__WinNT.cxx \
  graf3d/eve/src/G__Eve1.cxx graf3d/eve/src/G__Eve2.cxx \
  graf2d/x11ttf/src/G__X11TTF.cxx graf2d/x11/src/G__X11.cxx \
- graf2d/postscript/src/G__PostScript.cxx \
- graf2d/gpad/src/G__GPad.cxx graf3d/x3d/src/G__X3D.cxx \
+ graf3d/x3d/src/G__X3D.cxx \
  roofit/roofitcore/src/G__RooFitCore1.cxx \
  roofit/roofitcore/src/G__RooFitCore2.cxx \
  roofit/roofitcore/src/G__RooFitCore3.cxx \
@@ -7339,28 +7341,8 @@ sed \
     -e "s|@uselibc++@|$uselibcxx|"         \
     -e "s|@hasllvm@|$hasllvm|"             \
     -e "s|@llvmdir@|$llvmdir|"             \
-    -e "s|@setgcctoolchain@|$setgcctoolchain|" \
-    -e "s|@gcctoolchain@|$gcctoolchainconf|"   \
     < RConfigure.tmp > RConfigure-out.tmp
 rm -f RConfigure.tmp
-
-if test ! "x${gccincdirarr[0]}" = "x"; then
-    echo "#ifndef ROOT_RConfigure_GCC" >> RConfigure-out.tmp
-    echo "#define ROOT_RConfigure_GCC" >> RConfigure-out.tmp
-    k=0
-    for i in "${!gccincdirarr[@]}"; do
-        if `echo ${gccincdirarr[$i]} | grep "/c++/" > /dev/null  2>&1` ; then
-            echo "#define R__GCC_INC_DIR_$k \"${gccincdirarr[$i]}\"" >> RConfigure-out.tmp
-            k=`expr $k + 1`
-            if (($k > 10)); then
-                result "`basename $0`: more than 10 alternative gcc C++ library include paths."
-                result "Code needs to be modified, call ROOT support."
-                exit 1
-            fi
-        fi
-    done
-    echo "#endif" >> RConfigure-out.tmp
-fi
 
 # only update $CONFIGUREOUT when different
 if test -f $CONFIGUREOUT; then

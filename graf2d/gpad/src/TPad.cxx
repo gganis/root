@@ -400,7 +400,7 @@ TLegend *TPad::BuildLegend(Double_t x1, Double_t y1, Double_t x2, Double_t y2,
    // primitives in a TPad. Only those deriving from TAttLine,
    // TAttMarker and TAttFill are added, excluding TPave and TFrame
    // derived classes. x1, y1, x2, y2 are the TLegend coordinates.
-   // title is the legend title. By default it is " ". The caller 
+   // title is the legend title. By default it is " ". The caller
    // program owns the returned TLegend.
    //
    // If the pad contains some TMultiGraph or THStack the individual
@@ -3194,8 +3194,10 @@ void TPad::PaintBox(Double_t x1, Double_t y1, Double_t x2, Double_t y2, Option_t
 
                GetPainter()->SetOpacity(style - 4000);
             }
-         } else {
+         } else if (style >= 1000 && style <= 1999) {
             GetPainter()->DrawBox(x1, y1, x2, y2, TVirtualPadPainter::kFilled);
+         } else {
+            GetPainter()->DrawBox(x1, y1, x2, y2, TVirtualPadPainter::kHollow);
          }
          if (option[0] == 'l') GetPainter()->DrawBox(x1, y1, x2, y2, TVirtualPadPainter::kHollow);
       } else {
@@ -4281,6 +4283,8 @@ void TPad::Print(const char *filenam, Option_t *option)
    //    }// end loop
    //
    // The delay between each frame must be specified in each Print() statement.
+   // If the file "myfile.gif" already exists, the new frame are appended at
+   // the end of the file.
 
    TString psname, fs1, fs2;
    char *filename;
@@ -4456,7 +4460,7 @@ void TPad::Print(const char *filenam, Option_t *option)
 
       return;
    }
-   
+
    //==============Save pad/canvas as a TeX file================================
    if (strstr(opt,"tex")) {
       gVirtualPS = (TVirtualPS*)gROOT->GetListOfSpecials()->FindObject(psname);
@@ -4583,7 +4587,7 @@ void TPad::Print(const char *filenam, Option_t *option)
          gROOT->GetListOfSpecials()->Add(gVirtualPS);
          gVirtualPS = 0;
       }
-      
+
       if (!gSystem->AccessPathName(psname)) Info("Print", "%s file %s has been created", opt, psname.Data());
    } else {
       // Append to existing Postscript, PDF or GIF file

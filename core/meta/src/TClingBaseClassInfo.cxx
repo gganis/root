@@ -192,13 +192,17 @@ OffsetPtrFunc_t TClingBaseClassInfo::GenerateBaseOffsetFunction(const TClingClas
       ND->getNameForDiagnostic(stream, ND->getASTContext().getPrintingPolicy(), /*Qualified=*/true);
       stream.flush();
    }
+
+   const clang::Decl* derivedDecl = derivedClass->GetDecl();
+   const clang::Decl* targetDecl = targetClass->GetDecl();
+
    // Make the wrapper name.
    string wrapper_name;
    {
       ostringstream buf;
-      buf << derived_class_name;
+      buf << "h" << derivedDecl;
       buf << '_';
-      buf << target_class_name;
+      buf << "h" << targetDecl;
       wrapper_name = buf.str();
    }
    //  Write the wrapper code.
@@ -570,12 +574,13 @@ long TClingBaseClassInfo::Tagnum() const
    return fBaseInfo->Tagnum();
 }
 
-const char* TClingBaseClassInfo::FullName(const ROOT::TMetaUtils::TNormalizedCtxt &normCtxt) const
+void TClingBaseClassInfo::FullName(std::string &output, const ROOT::TMetaUtils::TNormalizedCtxt &normCtxt) const
 {
    if (!IsValid()) {
-      return 0;
+      output.clear();
+      return;
    }
-   return fBaseInfo->FullName(normCtxt);
+   fBaseInfo->FullName(output,normCtxt);
 }
 
 const char* TClingBaseClassInfo::Name() const

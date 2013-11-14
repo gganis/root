@@ -27,6 +27,7 @@
 //////////////////////////////////////////////////////////////////////////
 
 #include "TString.h"
+#include "TDictionary.h"
 
 #include "clang/AST/DeclBase.h"
 #include "llvm/ADT/SmallVector.h"
@@ -63,7 +64,7 @@ private:
 
 public:
    explicit TClingMethodInfo(cling::Interpreter *interp) 
-      : fInterp(interp), fFirstTime(true), fContextIdx(0U), fTitle(""), 
+      : fInterp(interp), fFirstTime(true), fContextIdx(0U), fTitle(""),
         fTemplateSpecIter(0), fSingleDecl(0) {}
 
    TClingMethodInfo(const TClingMethodInfo&);
@@ -75,6 +76,7 @@ public:
    ~TClingMethodInfo();
 
    const clang::FunctionDecl                   *GetMethodDecl() const;
+   TDictionary::DeclId_t                        GetDeclId() const;
    void                                         CreateSignature(TString &signature) const;
    void                                         Init(const clang::FunctionDecl *);
    void                                        *InterfaceMethod() const;
@@ -86,7 +88,7 @@ public:
    long                                         Property() const;
    long                                         ExtraProperty() const;
    TClingTypeInfo                              *Type() const;
-   const char                                  *GetMangledName() const;
+   std::string                                  GetMangledName() const;
    const char                                  *GetPrototype(const ROOT::TMetaUtils::TNormalizedCtxt &normCtxt) const;
    const char                                  *Name(const ROOT::TMetaUtils::TNormalizedCtxt &normCtxt) const;
    const char                                  *TypeName() const;

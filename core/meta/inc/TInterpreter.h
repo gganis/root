@@ -156,7 +156,7 @@ public:
    virtual void     UpdateListOfMethods(TClass *cl) const = 0;
    virtual TString  GetMangledName(TClass *cl, const char *method, const char *params, Bool_t objectIsConst = kFALSE) = 0;
    virtual TString  GetMangledNameWithPrototype(TClass *cl, const char *method, const char *proto, Bool_t objectIsConst = kFALSE, ROOT::EFunctionMatchMode /* mode */ = ROOT::kConversionMatch) = 0;
-   virtual const char *GetInterpreterTypeName(const char *name,Bool_t full = kFALSE) = 0;
+   virtual void     GetInterpreterTypeName(const char *name, std::string &output, Bool_t full = kFALSE) = 0;
    virtual void    *GetInterfaceMethod(TClass *cl, const char *method, const char *params, Bool_t objectIsConst = kFALSE) = 0;
    virtual void    *GetInterfaceMethodWithPrototype(TClass *cl, const char *method, const char *proto, Bool_t objectIsConst = kFALSE, ROOT::EFunctionMatchMode /* mode */ = ROOT::kConversionMatch) = 0;
    virtual void     Execute(const char *function, const char *params, int *error = 0) = 0;
@@ -201,6 +201,18 @@ public:
    // core/meta helper functions.
    virtual TMethodCall::EReturnType MethodCallReturnType(TFunction *func) const = 0;
 
+   typedef TDictionary::DeclId_t DeclId_t;
+   virtual DeclId_t GetDeclId(CallFunc_t *info) const = 0;   
+   virtual DeclId_t GetDeclId(ClassInfo_t *info) const = 0;
+   virtual DeclId_t GetDeclId(FuncTempInfo_t *info) const = 0;
+   virtual DeclId_t GetDeclId(MethodInfo_t *info) const = 0;
+   virtual DeclId_t GetDeclId(TypedefInfo_t *info) const = 0;
+
+   virtual DeclId_t GetFunction(ClassInfo_t *cl, const char *funcname) = 0;
+   virtual DeclId_t GetFunctionWithPrototype(ClassInfo_t *cl, const char* method, const char* proto, Bool_t objectIsConst = kFALSE, ROOT::EFunctionMatchMode mode = ROOT::kConversionMatch) = 0;
+   virtual DeclId_t GetFunctionWithValues(ClassInfo_t *cl, const char* method, const char* params, Bool_t objectIsConst = kFALSE) = 0;
+   virtual DeclId_t GetFunctionTemplate(ClassInfo_t *cl, const char *funcname) = 0;
+
    // CallFunc interface
    virtual void   CallFunc_Delete(CallFunc_t * /* func */) const {;}
    virtual void   CallFunc_Exec(CallFunc_t * /* func */, void * /* address */) const {;}
@@ -233,6 +245,7 @@ public:
 
 
    // ClassInfo interface
+   virtual Bool_t ClassInfo_Contains(ClassInfo_t *info, DeclId_t decl) const = 0;
    virtual Long_t ClassInfo_ClassProperty(ClassInfo_t * /* info */) const {return 0;}
    virtual void   ClassInfo_Delete(ClassInfo_t * /* info */) const {;}
    virtual void   ClassInfo_Delete(ClassInfo_t * /* info */, void * /* arena */) const {;}
@@ -301,11 +314,23 @@ public:
    virtual const char *DataMemberInfo_Title(DataMemberInfo_t * /* dminfo */) const {return 0;}
    virtual const char *DataMemberInfo_ValidArrayIndex(DataMemberInfo_t * /* dminfo */) const {return 0;}
 
+   // Function Template interface
+   virtual void   FuncTempInfo_Delete(FuncTempInfo_t * /* ft_info */) const = 0;
+   virtual FuncTempInfo_t  *FuncTempInfo_Factory(DeclId_t declid) const = 0;
+   virtual FuncTempInfo_t  *FuncTempInfo_FactoryCopy(FuncTempInfo_t * /* ft_info */) const = 0;
+   virtual Bool_t FuncTempInfo_IsValid(FuncTempInfo_t * /* ft_info */) const = 0;
+   virtual UInt_t FuncTempInfo_TemplateNargs(FuncTempInfo_t * /* ft_info */) const = 0;
+   virtual UInt_t FuncTempInfo_TemplateMinReqArgs(FuncTempInfo_t * /* ft_info */) const = 0;
+   virtual Long_t FuncTempInfo_Property(FuncTempInfo_t * /* ft_info */) const = 0;
+   virtual void FuncTempInfo_Name(FuncTempInfo_t * /* ft_info */, TString &name) const = 0;
+   virtual void FuncTempInfo_Title(FuncTempInfo_t * /* ft_info */, TString &title) const = 0;
+
    // MethodInfo interface
    virtual void   MethodInfo_CreateSignature(MethodInfo_t * /* minfo */, TString & /* signature */) const {;}
    virtual void   MethodInfo_Delete(MethodInfo_t * /* minfo */) const {;}
    virtual MethodInfo_t  *MethodInfo_Factory() const {return 0;}
    virtual MethodInfo_t  *MethodInfo_Factory(ClassInfo_t * /*clinfo*/) const {return 0;}
+   virtual MethodInfo_t  *MethodInfo_Factory(DeclId_t declid) const = 0;
    virtual MethodInfo_t  *MethodInfo_FactoryCopy(MethodInfo_t * /* minfo */) const {return 0;}
    virtual void  *MethodInfo_InterfaceMethod(MethodInfo_t * /* minfo */) const {return 0;}
    virtual Bool_t MethodInfo_IsValid(MethodInfo_t * /* minfo */) const {return 0;}

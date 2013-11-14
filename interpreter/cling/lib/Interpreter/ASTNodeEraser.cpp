@@ -6,20 +6,24 @@
 
 #include "ASTNodeEraser.h"
 #include "cling/Interpreter/Transaction.h"
+#include "cling/Utils/AST.h"
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclVisitor.h"
 #include "clang/AST/DependentDiagnostic.h"
-#include "clang/AST/Mangle.h"
+#include "clang/AST/GlobalDecl.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/FileManager.h"
 #include "clang/Sema/Scope.h"
 #include "clang/Sema/Sema.h"
 
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/JIT.h" // For debugging the EE in gdb
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Module.h"
+#include "llvm/Transforms/IPO.h"
 
 using namespace clang;
 
@@ -36,15 +40,13 @@ namespace cling {
     ///
     Sema* m_Sema;
 
+    ///\brief The execution engine, either JIT or MCJIT, being recovered.
+    ///
+    llvm::ExecutionEngine* m_EEngine;
+
     ///\brief The current transaction being reverted.
     ///
     const Transaction* m_CurTransaction;
-
-    ///\brief The mangler used to get the mangled names of the declarations
-    /// that we are removing from the module.
-    ///
-    llvm::OwningPtr<MangleContext> m_Mangler;
-
 
     ///\brief Reverted declaration contains a SourceLocation, representing a 
     /// place in the file where it was seen. Clang caches that file and even if
@@ -55,9 +57,8 @@ namespace cling {
     FileIDs m_FilesToUncache;
 
   public:
-    DeclReverter(Sema* S, const Transaction* T): m_Sema(S), m_CurTransaction(T) {
-      m_Mangler.reset(m_Sema->getASTContext().createMangleContext());
-    }
+    DeclReverter(Sema* S, llvm::ExecutionEngine* EE, const Transaction* T)
+      : m_Sema(S), m_EEngine(EE), m_CurTransaction(T) { }
     ~DeclReverter();
 
     ///\brief Interface with nice name, forwarding to Visit.
@@ -108,13 +109,26 @@ namespace cling {
     ///
     bool VisitFunctionDecl(FunctionDecl* FD);
 
-    ///\brief Removes the enumerator and its enumerator constants.
-    /// @param[in] ED - The declaration to be removed.
+    ///\brief Specialize the removal of constructors due to the fact the we need
+    /// the constructor type (aka CXXCtorType). The information is located in
+    /// the CXXConstructExpr of usually VarDecls. 
+    /// See clang::CodeGen::CodeGenFunction::EmitCXXConstructExpr.
+    ///
+    /// What we will do instead is to brute-force and try to remove from the 
+    /// llvm::Module all ctors of this class with all the types.
+    ///
+    ///\param[in] CXXCtor - The declaration to be removed.
     ///
     ///\returns true on success.
     ///
-    bool VisitEnumDecl(EnumDecl* ED);
+    bool VisitCXXConstructorDecl(CXXConstructorDecl* CXXCtor);
 
+    ///\brief Removes the DeclCotnext and its decls.
+    /// @param[in] DC - The declaration to be removed.
+    ///
+    ///\returns true on success.
+    ///
+    bool VisitDeclContext(DeclContext* DC);
 
     ///\brief Removes the namespace.
     /// @param[in] NSD - The declaration to be removed.
@@ -122,6 +136,17 @@ namespace cling {
     ///\returns true on success.
     ///
     bool VisitNamespaceDecl(NamespaceDecl* NSD);
+
+    ///\brief Removes a Tag (class/union/struct/enum). Most of the other
+    /// containers fall back into that case.
+    /// @param[in] TD - The declaration to be removed.
+    ///
+    ///\returns true on success.
+    ///
+    bool VisitTagDecl(TagDecl* TD);
+
+    void RemoveDeclFromModule(GlobalDecl& GD) const;
+    void RemoveStaticInit(llvm::Function& F) const;
 
     /// @name Helpers
     /// @{
@@ -137,21 +162,36 @@ namespace cling {
     ///\brief Removes given declaration from the chain of redeclarations.
     /// Rebuilds the chain and sets properly first and last redeclaration.
     /// @param[in] R - The redeclarable, its chain to be rebuilt.
+    /// @param[in] DC - Remove the redecl's lookup entry from this DeclContext.
     ///
     ///\returns the most recent redeclaration in the new chain.
     ///
     template <typename T>
-    T* RemoveFromRedeclChain(clang::Redeclarable<T>* R) {
+    bool VisitRedeclarable(clang::Redeclarable<T>* R, DeclContext* DC) {
       llvm::SmallVector<T*, 4> PrevDecls;
-      T* PrevDecl = 0;
-
+      T* PrevDecl = R->getMostRecentDecl();
       // [0]=>C [1]=>B [2]=>A ...
-      while ((PrevDecl = R->getPreviousDecl())) {
-        PrevDecls.push_back(PrevDecl);
-        R = PrevDecl;
+      while (PrevDecl) { // Collect the redeclarations, except the one we remove
+        if (PrevDecl != R)
+          PrevDecls.push_back(PrevDecl);
+        PrevDecl = PrevDecl->getPreviousDecl();
       }
 
       if (!PrevDecls.empty()) {
+        // Make sure we update the lookup maps, because the removed decl might
+        // be registered in the lookup and again findable.
+        StoredDeclsMap* Map = DC->getPrimaryContext()->getLookupPtr();
+        if (Map) {
+          DeclarationName Name = ((NamedDecl*)((T*)R))->getDeclName();
+          if (!Name.isEmpty()) {
+            StoredDeclsMap::iterator Pos = Map->find(Name);
+            if (Pos != Map->end() && !Pos->second.isNull()) {
+              // If this is a redeclaration of an existing decl, replace the
+              // old one with D.
+              Pos->second.HandleRedeclaration(PrevDecls[0]);
+            }
+          }
+        }
         // Put 0 in the end of the array so that the loop will reset the
         // pointer to latest redeclaration in the chain to itself.
         //
@@ -162,8 +202,7 @@ namespace cling {
           PrevDecls[i-1]->setPreviousDeclaration(PrevDecls[i]);
         }
       }
-
-      return PrevDecls.empty() ? 0 : PrevDecls[0]->getMostRecentDecl();
+      return true;
     }
 
     /// @}
@@ -226,31 +265,24 @@ namespace cling {
 
     DeclContext* DC = D->getLexicalDeclContext();
 
+#ifndef NDEBUG
     bool ExistsInDC = false;
-
-    for (DeclContext::decl_iterator I = DC->decls_begin(), E = DC->decls_end();
-         E !=I; ++I) {
+    // The decl should be already in, we shouldn't deserialize.
+    for (DeclContext::decl_iterator I = DC->noload_decls_begin(), 
+           E = DC->noload_decls_end(); E !=I; ++I)
       if (*I == D) {
         ExistsInDC = true;
         break;
       }
-    }
-
-    bool Successful = DeclContextExt::removeIfLast(DC, D);
-
-    // ExistsInDC && Successful
-    // true          false      -> false // In the context but cannot delete
-    // false         false      -> true  // Not in the context cannot delete
-    // true          true       -> true  // In the context and can delete
-    // false         true       -> assert // Not in the context but can delete ?
-    assert(!(!ExistsInDC && Successful) && \
-           "Not in the context but can delete?!");
-    if (ExistsInDC && !Successful)
-      return false;
-    else { // in release we'd want the assert to fall into true
-      m_Sema->getDiagnostics().Reset();
-      return true;
-    }
+    assert((D->isInvalidDecl() || ExistsInDC)
+           && "Declaration must exist in the DC");
+#endif
+    bool Successful = true;
+    DeclContextExt::removeIfLast(DC, D);
+    // With the bump allocator this is nop.
+    if (Successful)
+      m_Sema->getASTContext().Deallocate(D);
+    return Successful;
   }
 
   bool DeclReverter::VisitNamedDecl(NamedDecl* ND) {
@@ -258,7 +290,11 @@ namespace cling {
 
     DeclContext* DC = ND->getDeclContext();
 
-    // If the decl was removed make sure that we fix the lookup
+    // if the decl was anonymous we are done.
+    if (!ND->getIdentifier())
+      return Successful;
+
+     // If the decl was removed make sure that we fix the lookup
     if (Successful) {
       Scope* S = m_Sema->getScopeForContext(DC);
       if (S)
@@ -266,68 +302,46 @@ namespace cling {
 
       if (isOnScopeChains(ND))
         m_Sema->IdResolver.RemoveDecl(ND);
-
     }
 
-    // if it was successfully removed from the AST we have to check whether
-    // code was generated and remove it.
-    if (Successful && m_CurTransaction->getState() == Transaction::kCommitted) {
-      std::string mangledName = ND->getName();
-
-      if (m_Mangler->shouldMangleDeclName(ND)) {
-        mangledName = "";
-        llvm::raw_string_ostream RawStr(mangledName);
-        m_Mangler->mangleName(ND, RawStr);
-        RawStr.flush();
+#ifndef NDEBUG
+    StoredDeclsMap *Map = DC->getPrimaryContext()->getLookupPtr();
+    if (Map) { // DeclContexts like EnumDecls don't have lookup maps.
+      // Make sure we the decl doesn't exist in the lookup tables.
+      StoredDeclsMap::iterator Pos = Map->find(ND->getDeclName());
+      // Most decls only have one entry in their list, special case it.
+      if (NamedDecl *OldD = Pos->second.getAsDecl())
+        assert(OldD != ND && "Lookup entry still exists.");
+      else if (StoredDeclsList::DeclsTy* Vec = Pos->second.getAsVector()) {
+        // Otherwise iterate over the list with entries with the same name.
+        // TODO: Walk the redeclaration chain if the entry was a redeclaration. 
+   
+        for (StoredDeclsList::DeclsTy::const_iterator I = Vec->begin(), 
+               E = Vec->end(); I != E; ++I)
+          assert(*I != ND && "Lookup entry still exists.");
       }
-
-      llvm::GlobalValue* GV 
-        = m_CurTransaction->getModule()->getNamedValue(mangledName);
-
-      if (!GV->use_empty())
-        GV->replaceAllUsesWith(llvm::UndefValue::get(GV->getType()));
-      GV->eraseFromParent();
+      else
+        assert(Pos->second.isNull() && "!?");
     }
+#endif
 
     return Successful;
   }
 
   bool DeclReverter::VisitVarDecl(VarDecl* VD) {
-    bool Successful = VisitNamedDecl(VD);
+    bool Successful = VisitRedeclarable(VD, VD->getDeclContext());
+    Successful = VisitDeclaratorDecl(VD);
 
-    DeclContext* DC = VD->getDeclContext();
-    Scope* S = m_Sema->getScopeForContext(DC);
-
-    // Find other decls that the old one has replaced
-    StoredDeclsMap *Map = DC->getPrimaryContext()->getLookupPtr();
-    if (!Map)
-      return false;
-    StoredDeclsMap::iterator Pos = Map->find(VD->getDeclName());
-    // FIXME: All of that should be moved in VisitNamedDecl
-    assert((VD->isHidden() || Pos != Map->end())
-           && "no lookup entry for decl");
-
-    if (Pos->second.isNull())
-      // We need to rewire the list of the redeclarations in order to exclude
-      // the reverted one, because it gets found for example by
-      // Sema::MergeVarDecl and ends up in the lookup
-      //
-      if (VarDecl* MostRecentVD = RemoveFromRedeclChain(VD)) {
-
-        Pos->second.setOnlyValue(MostRecentVD);
-        if (S)
-          S->AddDecl(MostRecentVD);
-        m_Sema->IdResolver.AddDecl(MostRecentVD);
-      }
-
+    //If the transaction was committed we need to cleanup the execution engine.
+    GlobalDecl GD(VD);
+    RemoveDeclFromModule(GD);
     return Successful;
   }
 
   bool DeclReverter::VisitFunctionDecl(FunctionDecl* FD) {
-    bool Successful = true;
-
-    DeclContext* DC = FD->getDeclContext();
-    Scope* S = m_Sema->getScopeForContext(DC);
+    bool Successful = VisitDeclContext(FD);
+    Successful = VisitRedeclarable(FD, FD->getDeclContext());
+    Successful = VisitDeclaratorDecl(FD);
 
     // Template instantiation of templated function first creates a canonical
     // declaration and after the actual template specialization. For example:
@@ -357,9 +371,10 @@ namespace cling {
         size_t specInfoSize = This->getSpecializations().size();
         
         This->getSpecializations().clear();
+        void* InsertPos = 0;
         for (size_t i = 0; i < specInfoSize; ++i)
           if (&specInfos[i] != info) {
-            This->addSpecialization(&specInfos[i], /*InsertPos*/(void*)0);
+            This->addSpecialization(&specInfos[i], InsertPos);
           }
       }
     };
@@ -375,75 +390,53 @@ namespace cling {
                                          CanFD->getTemplateSpecializationInfo());
     }
 
-    // Find other decls that the old one has replaced
-    StoredDeclsMap *Map = DC->getPrimaryContext()->getLookupPtr();
-    if (!Map)
-      return false;
-    StoredDeclsMap::iterator Pos = Map->find(FD->getDeclName());
-    assert(Pos != Map->end() && "no lookup entry for decl");
 
-    if (Pos->second.getAsDecl()) {
-      Successful = VisitNamedDecl(FD) && Successful;
+    // The Structors need to be handled differently.
+    if (isa<CXXConstructorDecl>(FD) || isa<CXXDestructorDecl>(FD))
+      return Successful;
+    //If the transaction was committed we need to cleanup the execution engine.
 
-      Pos = Map->find(FD->getDeclName());
-      assert(Pos != Map->end() && "no lookup entry for decl");
-
-      if (Pos->second.isNull()) {
-        // When we have template specialization we have to clean up
-        if (FD->isFunctionTemplateSpecialization()) {
-          while ((FD = FD->getPreviousDecl())) {
-            Successful = VisitNamedDecl(FD) && Successful;
-          }
-          return true;
-        }
-
-        // We need to rewire the list of the redeclarations in order to exclude
-        // the reverted one, because it gets found for example by
-        // Sema::MergeVarDecl and ends up in the lookup
-        //
-        if (FunctionDecl* MostRecentFD = RemoveFromRedeclChain(FD)) {
-          Pos->second.setOnlyValue(MostRecentFD);
-          if (S)
-            S->AddDecl(MostRecentFD);
-          m_Sema->IdResolver.AddDecl(MostRecentFD);
-        }
-      }
-    }
-    else if (Pos->second.getAsVector()) {
-      llvm::SmallVector<NamedDecl*, 4>& Decls = *Pos->second.getAsVector();
-      for(llvm::SmallVector<NamedDecl*, 4>::reverse_iterator I = Decls.rbegin();
-          I != Decls.rend(); ++I)
-        if ((*I) == FD)
-          if (FunctionDecl* MostRecentFD = RemoveFromRedeclChain(FD)) {
-            // This will delete the decl from the vector, because it is 
-            // generated from the decl context.
-            Successful = VisitNamedDecl((*I)) && Successful;
-            (*I) = MostRecentFD;
-          }
-    } else {
-      // There are no decls. But does this really mean "unsuccessful"?
-      return false;
-    }
+    GlobalDecl GD(FD);
+    RemoveDeclFromModule(GD);
 
     return Successful;
   }
 
-  bool DeclReverter::VisitEnumDecl(EnumDecl* ED) {
-    bool Successful = true;
+  bool DeclReverter::VisitCXXConstructorDecl(CXXConstructorDecl* CXXCtor) {
+    bool Successful = VisitCXXMethodDecl(CXXCtor);
 
-    for (EnumDecl::enumerator_iterator I = ED->enumerator_begin(),
-           E = ED->enumerator_end(); I != E; ++I) {
-      assert(I->getDeclName() && "EnumConstantDecl with no name?");
-      Successful = VisitNamedDecl(*I) && Successful;
+    // Brute-force all possibly generated ctors.
+    // Ctor_Complete            Complete object ctor.
+    // Ctor_Base                Base object ctor.
+    // Ctor_CompleteAllocating 	Complete object allocating ctor. 
+    GlobalDecl GD(CXXCtor, Ctor_Complete);
+    RemoveDeclFromModule(GD);
+    GD = GlobalDecl(CXXCtor, Ctor_Base);
+    RemoveDeclFromModule(GD);
+    GD = GlobalDecl(CXXCtor, Ctor_CompleteAllocating);
+    RemoveDeclFromModule(GD);
+    return Successful;
+  }
+
+  bool DeclReverter::VisitDeclContext(DeclContext* DC) {
+    bool Successful = true;
+    typedef llvm::SmallVector<Decl*, 64> Decls;
+    Decls declsToErase;
+    // Removing from single-linked list invalidates the iterators.
+    for (DeclContext::decl_iterator I = DC->decls_begin(); 
+         I != DC->decls_end(); ++I) {
+      declsToErase.push_back(*I);
     }
 
-    Successful = VisitNamedDecl(ED) && Successful;
-
+    for(Decls::iterator I = declsToErase.begin(), E = declsToErase.end(); 
+        I != E; ++I)
+      Successful = Visit(*I) && Successful;
     return Successful;
   }
 
   bool DeclReverter::VisitNamespaceDecl(NamespaceDecl* NSD) {
-    bool Successful = VisitNamedDecl(NSD);
+    bool Successful = VisitDeclContext(NSD);
+    Successful = VisitNamedDecl(NSD);
 
     //DeclContext* DC = NSD->getPrimaryContext();
     DeclContext* DC = NSD->getDeclContext();
@@ -467,6 +460,113 @@ namespace cling {
 
     return Successful;
   }
+
+  bool DeclReverter::VisitTagDecl(TagDecl* TD) {
+    bool Successful = VisitDeclContext(TD);
+    Successful = VisitTypeDecl(TD);
+    return Successful;
+  }
+
+  void DeclReverter::RemoveDeclFromModule(GlobalDecl& GD) const {
+    using namespace llvm;
+    // if it was successfully removed from the AST we have to check whether
+    // code was generated and remove it.
+
+    // From llvm's mailing list, explanation of the RAUW'd assert:
+    //
+    // The problem isn't with your call to 
+    // replaceAllUsesWith per se, the problem is that somebody (I would guess 
+    // the JIT?) is holding it in a ValueMap.
+    //
+    // We used to have a problem that some parts of the code would keep a 
+    // mapping like so:
+    //    std::map<Value *, ...>
+    // while somebody else would modify the Value* without them noticing, 
+    // leading to a dangling pointer in the map. To fix that, we invented the 
+    // ValueMap which puts a Use that doesn't show up in the use_iterator on 
+    // the Value it holds. When the Value is erased or RAUW'd, the ValueMap is 
+    // notified and in this case decides that's not okay and terminates the 
+    // program.
+    //
+    // Probably what's happened here is that the calling function has had its 
+    // code generated by the JIT, but not the callee. Thus the JIT emitted a 
+    // call to a generated stub, and will do the codegen of the callee once 
+    // that stub is reached. Of course, once the JIT is in this state, it holds 
+    // on to the Function with a ValueMap in order to prevent things from 
+    // getting out of sync.
+    //
+    if (m_CurTransaction->getState() == Transaction::kCommitted) {
+      std::string mangledName;
+      utils::Analyze::maybeMangleDeclName(GD, mangledName);
+
+      GlobalValue* GV
+        = m_CurTransaction->getModule()->getNamedValue(mangledName);
+      if (GV) { // May be deferred decl and thus 0
+        GV->removeDeadConstantUsers();
+        if (!GV->use_empty()) {
+          // Assert that if there was a use it is not coming from the explicit 
+          // AST node, but from the implicitly generated functions, which ensure
+          // the initialization order semantics. Such functions are:
+          // _GLOBAL__I* and __cxx_global_var_init*
+          // 
+          // We can 'afford' to drop all the references because we know that the
+          // static init functions must be called only once, and that was
+          // already done.
+          SmallVector<User*, 4> uses;
+          
+          for(llvm::Value::use_iterator I = GV->use_begin(), E = GV->use_end();
+              I != E; ++I) {
+            uses.push_back(*I);
+          }
+
+          for(SmallVector<User*, 4>::iterator I = uses.begin(), E = uses.end();
+              I != E; ++I)
+            if (llvm::Instruction* instr = dyn_cast<llvm::Instruction>(*I)) {
+              llvm::Function* F = instr->getParent()->getParent();
+              if (F->getName().startswith("__cxx_global_var_init"))
+                RemoveStaticInit(*F);
+          }
+        
+        }
+
+        // Cleanup the jit mapping of GV->addr.
+        m_EEngine->updateGlobalMapping(GV, 0);
+        GV->dropAllReferences();
+        if (!GV->use_empty()) {
+          if (Function* F = dyn_cast<Function>(GV)) {
+            Function* dummy = Function::Create(F->getFunctionType(), F->getLinkage());                                               
+            F->replaceAllUsesWith(dummy);
+          }
+          else
+            GV->replaceAllUsesWith(UndefValue::get(GV->getType()));
+        }
+        GV->eraseFromParent();
+      }
+    }
+  }
+
+  void DeclReverter::RemoveStaticInit(llvm::Function& F) const {
+    // In our very controlled case the parent of the BasicBlock is the 
+    // static init llvm::Function.
+    assert(F.getName().startswith("__cxx_global_var_init")
+           && "Not a static init");
+    assert(F.hasInternalLinkage() && "Not a static init");
+    // The static init functions have the layout:
+    // declare internal void @__cxx_global_var_init1() section "..."
+    //
+    // define internal void @_GLOBAL__I_a2() section "..." {
+    // entry:
+    //  call void @__cxx_global_var_init1()
+    //  ret void
+    // }
+    //
+    assert(F.hasOneUse() && "Must have only one use");
+    // erase _GLOBAL__I* first
+    llvm::BasicBlock* BB = cast<llvm::Instruction>(F.use_back())->getParent();
+    BB->getParent()->eraseFromParent();
+    F.eraseFromParent();
+  }
+
 
   // See Sema::PushOnScopeChains
   bool DeclReverter::isOnScopeChains(NamedDecl* ND) {
@@ -512,18 +612,20 @@ namespace cling {
     return false;
   }
 
-  ASTNodeEraser::ASTNodeEraser(Sema* S) : m_Sema(S) {
-  }
+  ASTNodeEraser::ASTNodeEraser(Sema* S, llvm::ExecutionEngine* EE)
+    : m_Sema(S), m_EEngine(EE) { }
 
   ASTNodeEraser::~ASTNodeEraser() {
   }
 
-  bool ASTNodeEraser::RevertTransaction(const Transaction* T) {
-    DeclReverter DeclRev(m_Sema, T);
+  bool ASTNodeEraser::RevertTransaction(Transaction* T) {
+    DeclReverter DeclRev(m_Sema, m_EEngine, T);
     bool Successful = true;
 
-    for (Transaction::const_reverse_iterator I = T->rdecls_begin(),
-           E = T->rdecls_end(); I != E; ++I) {
+    for (Transaction::const_iterator I = T->decls_begin(),
+           E = T->decls_end(); I != E; ++I) {
+      if ((*I).m_Call != Transaction::kCCIHandleTopLevelDecl)
+        continue;
       const DeclGroupRef& DGR = (*I).m_DGR;
 
       for (DeclGroupRef::const_iterator
@@ -536,6 +638,15 @@ namespace cling {
 #endif
       }
     }
+    m_Sema->getDiagnostics().Reset();
+
+    // Cleanup the module from unused global values.
+    //llvm::ModulePass* globalDCE = llvm::createGlobalDCEPass();
+    //globalDCE->runOnModule(*T->getModule());
+    if (Successful)
+      T->setState(Transaction::kRolledBack);
+    else
+      T->setState(Transaction::kRolledBackWithErrors);
 
     return Successful;
   }

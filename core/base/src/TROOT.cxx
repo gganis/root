@@ -108,6 +108,8 @@
 #include "TVirtualMutex.h"
 #include "TInterpreter.h"
 #include "TListOfTypes.h"
+#include "TListOfFunctions.h"
+#include "TFunctionTemplate.h"
 
 #include <string>
 namespace std {} using namespace std;
@@ -1092,9 +1094,10 @@ static TClass *R__FindSTLClass(const char *name, Bool_t load, Bool_t silent, con
    if (cl==0) {
       // Try the alternate name where all the typedefs are resolved:
 
-      const char *altname = gInterpreter->GetInterpreterTypeName(name);
-      if (altname && strcmp(altname,name)!=0 && strcmp(altname,outername)!=0) {
-         cl = TClass::GetClass(altname,load,silent);
+      std::string altname;
+      gInterpreter->GetInterpreterTypeName(name,altname);
+      if (altname.length() && altname != name && altname != outername) {
+         cl = TClass::GetClass(altname.c_str(),load,silent);
       }
    }
    if (cl==0) {
@@ -1216,6 +1219,25 @@ TObject *TROOT::GetFunction(const char *name) const
 }
 
 //______________________________________________________________________________
+TFunctionTemplate *TROOT::GetFunctionTemplate(const char *name)
+{
+   if (!gInterpreter) return 0;
+
+   if (!fFuncTemplate) fFuncTemplate = new TList();
+
+   TFunctionTemplate *result;
+   result = (TFunctionTemplate*)fFuncTemplate->FindObject(name);
+   if (!result) {
+      TInterpreter::DeclId_t id = gInterpreter->GetFunctionTemplate(0,name);
+      if (id) {
+         FuncTempInfo_t *info = gInterpreter->FuncTempInfo_Factory(id);
+         result = new TFunctionTemplate(info);
+      }
+   }
+   return result;
+}
+
+//______________________________________________________________________________
 TGlobal *TROOT::GetGlobal(const char *name, Bool_t load) const
 {
    // Return pointer to global variable by name. If load is true force
@@ -1252,14 +1274,25 @@ TGlobal *TROOT::GetGlobal(const TObject *addr, Bool_t load) const
    }
    return 0;
 }
+//______________________________________________________________________________
+TListOfFunctions *TROOT::GetGlobalFunctions()
+{
+   // Internal routine returning, and creating if necessary, the list
+   // of global function.
+
+   if (!fGlobalFunctions) fGlobalFunctions = new TListOfFunctions(0);
+   return fGlobalFunctions;
+}
 
 //______________________________________________________________________________
 TFunction *TROOT::GetGlobalFunction(const char *function, const char *params,
                                     Bool_t load)
 {
-   // Return pointer to global function by name. If params != 0
-   // it will also resolve overloading. If load is true force reading
-   // of all currently defined global functions from CINT (more expensive).
+   // Return pointer to global function by name.
+   // If params != 0 it will also resolve overloading other it returns the first
+   // name match.
+   // If params == 0 and load is true force reading of all currently defined
+   // global functions from Cling.
    // The param string must be of the form: "3189,\"aap\",1.3".
 
    if (!params)
@@ -1268,14 +1301,18 @@ TFunction *TROOT::GetGlobalFunction(const char *function, const char *params,
       if (!fInterpreter)
          Fatal("GetGlobalFunction", "fInterpreter not initialized");
 
-      TFunction *f;
-      TIter      next(GetListOfGlobalFunctions(load));
+      TInterpreter::DeclId_t decl = gInterpreter->GetFunctionWithValues(0,
+                                                                 function, params,
+                                                                 false);
 
-      TString mangled = gInterpreter->GetMangledName(0, function, params);
-      while ((f = (TFunction *) next())) {
-         if (mangled == f->GetMangledName()) return f;
-      }
+      if (!decl) return 0;
 
+      TFunction *f = GetGlobalFunctions()->Get(decl);
+      if (f) return f;
+
+      Error("GetGlobalFunction",
+            "\nDid not find matching TFunction <%s> with \"%s\".",
+            function,params);
       return 0;
    }
 }
@@ -1295,15 +1332,17 @@ TFunction *TROOT::GetGlobalFunctionWithPrototype(const char *function,
       if (!fInterpreter)
          Fatal("GetGlobalFunctionWithPrototype", "fInterpreter not initialized");
 
-      TFunction *f;
-      TIter      next(GetListOfGlobalFunctions(load));
+      TInterpreter::DeclId_t decl = gInterpreter->GetFunctionWithPrototype(0,
+                                                                           function, proto);
 
-      TString mangled = gInterpreter->GetMangledNameWithPrototype(0,
-                                                                     function,
-                                                                     proto);
-      while ((f = (TFunction *) next())) {
-         if (mangled == f->GetMangledName()) return f;
-      }
+      if (!decl) return 0;
+
+      TFunction *f = GetGlobalFunctions()->Get(decl);
+      if (f) return f;
+
+      Error("GetGlobalFunctionWithPrototype",
+            "\nDid not find matching TFunction <%s> with \"%s\".",
+            function,proto);
       return 0;
    }
 }
@@ -1351,15 +1390,13 @@ TCollection *TROOT::GetListOfGlobalFunctions(Bool_t load)
    // you can set load=kFALSE (default).
 
    if (!fGlobalFunctions) {
-      fGlobalFunctions = new THashTable(100, 3);
-      load = kTRUE;
+      fGlobalFunctions = new TListOfFunctions(0);
    }
 
    if (!fInterpreter)
       Fatal("GetListOfGlobalFunctions", "fInterpreter not initialized");
 
-   if (load)
-      gInterpreter->UpdateListOfGlobalFunctions();
+   if (load) fGlobalFunctions->Load();
 
    return fGlobalFunctions;
 }
@@ -2009,6 +2046,13 @@ void TROOT::RefreshBrowsers()
    while ((b = (TBrowser*) next()))
       b->SetRefreshFlag(kTRUE);
 }
+//______________________________________________________________________________
+static void CallCloseFiles()
+{
+   // Insure that the files, canvases and sockets are closed.
+   
+   if (TROOT::Initialized() && ROOT::gROOTLocal) gROOT->CloseFiles();
+}
 
 //______________________________________________________________________________
 void TROOT::RegisterModule(const char* modulename,
@@ -2023,7 +2067,65 @@ void TROOT::RegisterModule(const char* modulename,
    // is NULL, i.e. during startup, where the information is buffered in
    // the static GetModuleHeaderInfoBuffer().   
 
+
+   // First a side track to insure proper end of process behavior.
+
+   // Register for each loaded dictionary (and thus for each library),
+   // that we need to Close the ROOT files as soon as this library
+   // might start being unloaded after main.
+   //
+   // By calling atexit here (rather than directly from within the
+   // library) we make sure that this is not called if the library is
+   // 'only' dlclosed.
+
+   // On Ubuntu the linker strips the unused libraries.  Eventhough
+   // stressHistogram is explicitly linked against libNet, it is not
+   // retained and thus is loaded only as needed in the middle part of
+   // the execution.  Concretely this also means that it is loaded
+   // *after* the construction of the TApplication object and thus
+   // after the registration (atexit) of the EndOfProcessCleanups
+   // routine.  Consequently, after the end of main, libNet is
+   // unloaded before EndOfProcessCleanups is called.  When
+   // EndOfProcessCleanups is executed it indirectly needs the TClass
+   // for TSocket and its search will use resources that have already
+   // been unloaded (technically the function static in TUnixSystem's
+   // DynamicPath and the dictionary from libNet).
+
+   // Similarly, the ordering (before this commit) was broken in the
+   // following case:
+
+   //    TApplication creation (EndOfProcessCleanups registration)
+   //    load UserLibrary
+   //    create TFile
+   //    Append UserObject to TFile
+
+   // and after the end of main the order of execution was
+
+   //    unload UserLibrary
+   //    call EndOfProcessCleanups
+   //       Write the TFile
+   //         attempt to write the user object.
+   //    ....
+
+   // where what we need is to have the files closen/written before
+   // the unloading of the library.
+
+   // To solve the problem we now register an atexit function for
+   // every dictionary thus making sure there is at least one executed
+   // before the first library tear down after main.
+
+   // If atexit is called directly within a library's code, the
+   // function will called *either* when the library is 'dlclose'd or
+   // after then end of main (whichever comes first).  We do *not*
+   // want the files to be closed whenever a library is unloaded via
+   // dlclose.  To avoid this, we add the function (CallCloseFiles)
+   // from the dictionary indirectly (via ROOT::RegisterModule).  In
+   // this case the function will only only be called either when
+   // libCore is 'dlclose'd or right after the end of main.
+
+   atexit(CallCloseFiles);
    
+   // Now register with TCling.
    if (gCling) {
       gCling->RegisterModule(modulename, headers, allHeaders,
                              includePaths, payloadCode, triggerFunc);

@@ -98,12 +98,6 @@ namespace PyROOT {
       virtual Bool_t SetArg( PyObject*, TParameter_t&, CallFunc_t* = 0, Long_t = 0 );
    };
 
-   class TMacroConverter : public TConverter {
-   public:
-      virtual Bool_t SetArg( PyObject*, TParameter_t&, CallFunc_t* = 0, Long_t = 0 );
-      virtual PyObject* FromMemory( void* address );
-   };
-
    class TCStringConverter : public TConverter {
    public:
       TCStringConverter( UInt_t maxSize = UINT_MAX ) : fMaxSize( maxSize ) {}
@@ -202,6 +196,14 @@ namespace PyROOT {
       virtual PyObject* FromMemory( void* address );
       virtual Bool_t ToMemory( PyObject* value, void* address );
    };
+
+// CLING WORKAROUND -- classes for STL iterators are completely undefined in that
+// they come in a bazillion different guises, so just do whatever
+   class TSTLIteratorConverter : public TConverter {
+   public:
+      virtual Bool_t SetArg( PyObject*, TParameter_t&, CallFunc_t* = 0, Long_t = 0 );
+   };
+// -- END CLING WORKAROUND
 
    class TVoidPtrRefConverter : public TConverter {
    public:

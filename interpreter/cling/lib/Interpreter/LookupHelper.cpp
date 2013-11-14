@@ -98,7 +98,10 @@ namespace cling {
     //
     //  Try parsing the type name.
     //
-    TypeResult Res(P.ParseTypeName());
+    clang::ParsedAttributes Attrs(P.getAttrFactory());
+
+    TypeResult Res(P.ParseTypeName(0,Declarator::TypeNameContext,clang::AS_none,
+                                   0,&Attrs));
     if (Res.isUsable()) {
       // Accept it only if the whole name was parsed.
       if (P.NextToken().getKind() == clang::tok::eof) {
@@ -408,7 +411,7 @@ namespace cling {
     return foundDC;
   }
 
-  static bool FuncArgTypesMatch(const ASTContext& C, 
+  static bool FuncArgTypesMatch(const ASTContext& C,
                                 const llvm::SmallVector<Expr*, 4> &GivenArgs,
                                 const FunctionProtoType* FPT) {
     // FIXME: What if FTP->arg_size() != GivenArgTypes.size()?
@@ -563,6 +566,8 @@ namespace cling {
           // We prefer to get the canonical decl for consistency and ease
           // of comparison.
           TheDecl = TheDecl->getCanonicalDecl();
+          if (TheDecl->isTemplateInstantiation() && !TheDecl->isDefined())
+            S.InstantiateFunctionDefinition(SourceLocation(),TheDecl,true);
        }
     }
     return TheDecl;
@@ -586,7 +591,7 @@ namespace cling {
                                                            Context,P,S);
     
     if (TheDecl) {
-      if ( IsOverload( Context, FuncTemplateArgs, GivenArgs, TheDecl) ) {
+      if ( IsOverload(Context, FuncTemplateArgs, GivenArgs, TheDecl) ) {
         return 0;
       } else {
         // Double check const-ness.
@@ -749,11 +754,6 @@ namespace cling {
     // Given the correctly types arguments, etc. find the function itself.
 
     //
-    //  Our return value.
-    //
-    FunctionDecl* TheDecl = 0;
-
-    //
     //  Make the class we are looking up the function
     //  in the current scope to please the constructor
     //  name lookup.  We do not need to do this otherwise,
@@ -779,7 +779,7 @@ namespace cling {
       P.ExitScope();
       P.getCurScope()->setEntity(OldEntity);
       // Then exit.
-      return TheDecl;
+      return 0;
     }
 
     //
@@ -807,7 +807,7 @@ namespace cling {
       P.ExitScope();
       P.getCurScope()->setEntity(OldEntity);
       // Then cleanup and exit.
-      return TheDecl;
+      return 0;
     }
 
     //
@@ -823,7 +823,7 @@ namespace cling {
     if (Result.getResultKind() != LookupResult::Found &&
         Result.getResultKind() != LookupResult::FoundOverloaded) {
        // Lookup failed.
-       return TheDecl;
+       return 0;
     }
     return functionSelector(foundDC,objectIsConst,GivenArgs,
                             Result,
@@ -913,6 +913,158 @@ namespace cling {
     S.getDiagnostics().Reset();
 
     return true;
+  }
+
+  static
+  const FunctionTemplateDecl* findFunctionTemplateSelector(DeclContext* ,
+                                                       bool /* objectIsConst */,
+                                            const llvm::SmallVector<Expr*, 4> &,
+                                                           LookupResult &Result,
+                                                          DeclarationNameInfo &,
+                           const TemplateArgumentListInfo* ExplicitTemplateArgs,
+                                                          ASTContext&, Parser &,
+                                                           Sema &S) {
+    //
+    //  Check for lookup failure.
+    //
+    if (Result.empty())
+      return 0;
+    if (Result.isSingleResult())
+      return dyn_cast<FunctionTemplateDecl>(Result.getFoundDecl());
+    else {
+      for (LookupResult::iterator I = Result.begin(), E = Result.end();
+           I != E; ++I) {
+        NamedDecl* ND = *I;
+        FunctionTemplateDecl *MethodTmpl =dyn_cast<FunctionTemplateDecl>(ND);
+        if (MethodTmpl) {
+          return MethodTmpl;
+        }
+      }
+      return 0;
+    }
+  }
+
+  const FunctionTemplateDecl*
+  LookupHelper::findFunctionTemplate(const clang::Decl* scopeDecl,
+                                     llvm::StringRef templateName,
+                                     bool objectIsConst
+                                     ) const {
+    // Lookup a function template based on its Decl(Context), name.
+
+    //FIXME: remove code duplication with findFunctionArgs() and friends.
+
+    assert(scopeDecl && "Decl cannot be null");
+    //
+    //  Some utilities.
+    //
+    Parser& P = *m_Parser;
+    Sema& S = P.getActions();
+    ASTContext& Context = S.getASTContext();
+
+    //
+    //  Convert the passed decl into a nested name specifier,
+    //  a scope spec, and a decl context.
+    //
+    //  Do this 'early' to save on the expansive parser setup,
+    //  in case of failure.
+    //
+    CXXScopeSpec SS;
+    DeclContext* foundDC = getContextAndSpec(SS,scopeDecl,Context,S);
+    if (!foundDC) return 0;
+
+    ParserStateRAII ResetParserState(P);
+    llvm::SmallVector<Expr*, 4> GivenArgs;
+
+    Interpreter::PushTransactionRAII pushedT(m_Interpreter);
+    return findFunction(foundDC, SS,
+                        templateName, GivenArgs, objectIsConst,
+                        Context, P, S, findFunctionTemplateSelector);
+  }
+
+  static
+  const FunctionDecl* findAnyFunctionSelector(DeclContext* ,
+                           bool /* objectIsConst */,
+                           const llvm::SmallVector<Expr*, 4> &,
+                           LookupResult &Result,
+                           DeclarationNameInfo &,
+                           const TemplateArgumentListInfo* ExplicitTemplateArgs,
+                           ASTContext&, Parser &, Sema &S) {
+    //
+    //  Check for lookup failure.
+    //
+    if (Result.empty())
+      return 0;
+    if (Result.isSingleResult())
+      return dyn_cast<FunctionDecl>(Result.getFoundDecl());
+    else {
+      NamedDecl *aResult = *(Result.begin());
+      FunctionDecl *res = dyn_cast<FunctionDecl>(aResult);
+      if (res) return res;
+      FunctionTemplateDecl *MethodTmpl =dyn_cast<FunctionTemplateDecl>(aResult);
+      if (MethodTmpl) {
+        if (!ExplicitTemplateArgs || ExplicitTemplateArgs->size()==0) {
+          // Not argument was specified, any instantiation will do.
+
+          if (MethodTmpl->spec_begin() != MethodTmpl->spec_end()) {
+             return *( MethodTmpl->spec_begin() );
+          }
+        }
+        // pick a specialization that result match the given arguments
+        SourceLocation loc;
+        sema::TemplateDeductionInfo Info(loc);
+        FunctionDecl *fdecl = 0;
+        Sema::TemplateDeductionResult Result
+          = S.DeduceTemplateArguments(MethodTmpl,
+                    const_cast<TemplateArgumentListInfo*>(ExplicitTemplateArgs),
+                                      fdecl,
+                                      Info);
+        if (Result) {
+          // Deduction failure.
+          return 0;
+        } else {
+          // Instantiate the function if needed.
+          if (!fdecl->isDefined())
+            S.InstantiateFunctionDefinition(loc,fdecl,true);
+          return fdecl;
+        }
+      }
+      return 0;
+    }
+  }
+
+  const FunctionDecl* LookupHelper::findAnyFunction(const clang::Decl*scopeDecl,
+                                                    llvm::StringRef funcName,
+                                                    bool objectIsConst
+                                                    ) const{
+
+    //FIXME: remove code duplication with findFunctionArgs() and friends.
+
+    assert(scopeDecl && "Decl cannot be null");
+    //
+    //  Some utilities.
+    //
+    Parser& P = *m_Parser;
+    Sema& S = P.getActions();
+    ASTContext& Context = S.getASTContext();
+
+    //
+    //  Convert the passed decl into a nested name specifier,
+    //  a scope spec, and a decl context.
+    //
+    //  Do this 'early' to save on the expansive parser setup,
+    //  in case of failure.
+    //
+    CXXScopeSpec SS;
+    DeclContext* foundDC = getContextAndSpec(SS,scopeDecl,Context,S);
+    if (!foundDC) return 0;
+
+    ParserStateRAII ResetParserState(P);
+    llvm::SmallVector<Expr*, 4> GivenArgs;
+
+    Interpreter::PushTransactionRAII pushedT(m_Interpreter);
+    return findFunction(foundDC, SS,
+                        funcName, GivenArgs, objectIsConst,
+                        Context, P, S, findAnyFunctionSelector);
   }
 
   const FunctionDecl* LookupHelper::findFunctionProto(const Decl* scopeDecl,
@@ -1294,7 +1446,7 @@ namespace cling {
   bool LookupHelper::hasFunction(const clang::Decl* scopeDecl,
                                  llvm::StringRef funcName) const {
 
-    //FIXME: remore code duplication with findFunctionArgs() and friends.
+    //FIXME: remove code duplication with findFunctionArgs() and friends.
 
     assert(scopeDecl && "Decl cannot be null");
     //
