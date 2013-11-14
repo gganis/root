@@ -69,14 +69,14 @@ on the programming language `C++`, and therefore some knowledge about
 available literature about `C++` if you do not have any idea of what
 object oriented programming could be.
 
-PROOF is available for Unix platforms (Linux, Mac OS X, ...), but
+PROOF is part of ROOT and is available for Unix platforms (Linux, Mac OS X, ...), but
 in this guide we will implicitly assume that you are using Linux.
-PROOF is part of ROOT, so the first thing you need to do with ROOT is install
-it, don't you?
+The first thing you need to do with ROOT is install it, don't you?
 Obtaining the latest ROOT version is straightforward. Just seek the "Pro" version
 on this webpage <http://root.cern.ch/drupal/content/downloading-root>.
 You will find precompiled versions for the different architectures, or
 the ROOT source code to compile yourself. Just pick up the flavour you
 need and follow the installation instructions.
 
-**Let's dive into PROOF!**
+Before start divign into the details we introduce some terminology which you will
+encounter often when working with PROOF.

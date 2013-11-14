@@ -1,4 +1,4 @@
-MDFILES=titlepage.md Introduction.md Terminology.md Tutorials.md  \
+MDFILES=titlepage.md Introduction.md Basics.md Terminology.md Tutorials.md  \
 	concludingRemarks.md references.md
 
 OPTIONS=-s -S -f markdown --toc --chapters --number-sections \
