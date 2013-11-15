@@ -182,13 +182,40 @@ namespace cling {
         // be registered in the lookup and again findable.
         StoredDeclsMap* Map = DC->getPrimaryContext()->getLookupPtr();
         if (Map) {
-          DeclarationName Name = ((NamedDecl*)((T*)R))->getDeclName();
+          NamedDecl* ND = (NamedDecl*)((T*)R);
+          DeclarationName Name = ND->getDeclName();
           if (!Name.isEmpty()) {
             StoredDeclsMap::iterator Pos = Map->find(Name);
             if (Pos != Map->end() && !Pos->second.isNull()) {
               // If this is a redeclaration of an existing decl, replace the
               // old one with D.
-              Pos->second.HandleRedeclaration(PrevDecls[0]);
+              if (!Pos->second.HandleRedeclaration(PrevDecls[0])) {
+                // We are probably in the case where we had overloads and we 
+                // deleted an overload definition but we still have its 
+                // declaration. Say void f(); void f(int); void f(int) {}
+                // If f(int) was in the lookup table we remove it but we must
+                // put the declaration of void f(int);
+                if (Pos->second.getAsDecl() == ND)
+                  Pos->second.setOnlyValue(PrevDecls[0]);
+                else if (StoredDeclsList::DeclsTy* Vec 
+                         = Pos->second.getAsVector()) {
+                  bool wasReplaced = false;
+                  for (StoredDeclsList::DeclsTy::iterator I= Vec->begin(),
+                         E = Vec->end(); I != E; ++I)
+                    if (*I == ND) {
+                      // We need to replace it exactly at the same place where
+                      // the old one was. The reason is cling diff-based 
+                      // test suite
+                      *I = PrevDecls[0];
+                      wasReplaced = true;
+                      break;
+                    }
+                  // This will make the DeclContext::removeDecl happy. It also
+                  // tries to remove the decl from the lookup.
+                  if (wasReplaced)
+                    Pos->second.AddSubsequentDecl(ND);
+                }
+              }
             }
           }
         }
@@ -247,10 +274,14 @@ namespace cling {
         if (((DeclContextExt*)DC)->LastDecl == D) {
           // Valid. Thus remove.
           DC->removeDecl(D);
+          // Force rebuilding of the lookup table.
+          //DC->setMustBuildLookupTable();
           return true;
         }
       }
       else {
+        // Force rebuilding of the lookup table.
+        //DC->setMustBuildLookupTable();
         DC->removeDecl(D);
         return true;
       }
@@ -279,6 +310,7 @@ namespace cling {
 #endif
     bool Successful = true;
     DeclContextExt::removeIfLast(DC, D);
+
     // With the bump allocator this is nop.
     if (Successful)
       m_Sema->getASTContext().Deallocate(D);
@@ -303,25 +335,48 @@ namespace cling {
       if (isOnScopeChains(ND))
         m_Sema->IdResolver.RemoveDecl(ND);
     }
-
-#ifndef NDEBUG
+    
+    // Cleanup the lookup tables.
     StoredDeclsMap *Map = DC->getPrimaryContext()->getLookupPtr();
     if (Map) { // DeclContexts like EnumDecls don't have lookup maps.
       // Make sure we the decl doesn't exist in the lookup tables.
       StoredDeclsMap::iterator Pos = Map->find(ND->getDeclName());
-      // Most decls only have one entry in their list, special case it.
-      if (NamedDecl *OldD = Pos->second.getAsDecl())
-        assert(OldD != ND && "Lookup entry still exists.");
-      else if (StoredDeclsList::DeclsTy* Vec = Pos->second.getAsVector()) {
-        // Otherwise iterate over the list with entries with the same name.
-        // TODO: Walk the redeclaration chain if the entry was a redeclaration. 
-   
-        for (StoredDeclsList::DeclsTy::const_iterator I = Vec->begin(), 
-               E = Vec->end(); I != E; ++I)
-          assert(*I != ND && "Lookup entry still exists.");
+      if ( Pos != Map->end()) {
+        // Most decls only have one entry in their list, special case it.
+        if (Pos->second.getAsDecl() == ND)
+          Pos->second.remove(ND);
+        else if (StoredDeclsList::DeclsTy* Vec = Pos->second.getAsVector()) {
+          // Otherwise iterate over the list with entries with the same name.
+          // TODO: Walk the redeclaration chain if the entry was a redeclaration.    
+          for (StoredDeclsList::DeclsTy::const_iterator I = Vec->begin(), 
+                 E = Vec->end(); I != E; ++I)
+            if (*I == ND)
+              Pos->second.remove(ND);            
+        }
+        if (Pos->second.isNull())
+          Map->erase(Pos);
       }
-      else
-        assert(Pos->second.isNull() && "!?");
+    }
+
+#ifndef NDEBUG
+    if (Map) { // DeclContexts like EnumDecls don't have lookup maps.
+      // Make sure we the decl doesn't exist in the lookup tables.
+      StoredDeclsMap::iterator Pos = Map->find(ND->getDeclName());
+      if ( Pos != Map->end()) {
+        // Most decls only have one entry in their list, special case it.
+        if (NamedDecl *OldD = Pos->second.getAsDecl())
+          assert(OldD != ND && "Lookup entry still exists.");
+        else if (StoredDeclsList::DeclsTy* Vec = Pos->second.getAsVector()) {
+          // Otherwise iterate over the list with entries with the same name.
+          // TODO: Walk the redeclaration chain if the entry was a redeclaration. 
+          
+          for (StoredDeclsList::DeclsTy::const_iterator I = Vec->begin(), 
+                 E = Vec->end(); I != E; ++I)
+            assert(*I != ND && "Lookup entry still exists.");
+        }
+        else
+          assert(Pos->second.isNull() && "!?");
+      }
     }
 #endif
 
@@ -329,8 +384,9 @@ namespace cling {
   }
 
   bool DeclReverter::VisitVarDecl(VarDecl* VD) {
+    // VarDecl : DeclaratiorDecl, Redeclarable
     bool Successful = VisitRedeclarable(VD, VD->getDeclContext());
-    Successful = VisitDeclaratorDecl(VD);
+    Successful &= VisitDeclaratorDecl(VD);
 
     //If the transaction was committed we need to cleanup the execution engine.
     GlobalDecl GD(VD);
@@ -339,9 +395,10 @@ namespace cling {
   }
 
   bool DeclReverter::VisitFunctionDecl(FunctionDecl* FD) {
-    bool Successful = VisitDeclContext(FD);
-    Successful = VisitRedeclarable(FD, FD->getDeclContext());
-    Successful = VisitDeclaratorDecl(FD);
+    // FunctionDecl : DeclaratiorDecl, DeclContext, Redeclarable
+    bool Successful = VisitRedeclarable(FD, FD->getDeclContext());
+    Successful &= VisitDeclContext(FD);
+    Successful &= VisitDeclaratorDecl(FD);
 
     // Template instantiation of templated function first creates a canonical
     // declaration and after the actual template specialization. For example:
@@ -436,34 +493,32 @@ namespace cling {
 
   bool DeclReverter::VisitNamespaceDecl(NamespaceDecl* NSD) {
     bool Successful = VisitDeclContext(NSD);
-    Successful = VisitNamedDecl(NSD);
 
-    //DeclContext* DC = NSD->getPrimaryContext();
+    // If this wasn't the original namespace we need to nominate a new one and
+    // store it in the lookup tables.
     DeclContext* DC = NSD->getDeclContext();
-    Scope* S = m_Sema->getScopeForContext(DC);
-
-    // Find other decls that the old one has replaced
     StoredDeclsMap *Map = DC->getPrimaryContext()->getLookupPtr();
     if (!Map)
       return false;
     StoredDeclsMap::iterator Pos = Map->find(NSD->getDeclName());
-    assert(Pos != Map->end() && "no lookup entry for decl");
+    assert(Pos != Map->end() && !Pos->second.isNull() 
+           && "no lookup entry for decl");
 
-    if (Pos->second.isNull())
-      if (NSD != NSD->getOriginalNamespace()) {
-        NamespaceDecl* NewNSD = NSD->getOriginalNamespace();
-        Pos->second.setOnlyValue(NewNSD);
-        if (S)
-          S->AddDecl(NewNSD);
-        m_Sema->IdResolver.AddDecl(NewNSD);
-      }
+    if (NSD != NSD->getOriginalNamespace()) {
+      NamespaceDecl* NewNSD = NSD->getOriginalNamespace();
+      Pos->second.setOnlyValue(NewNSD);
+      if (Scope* S = m_Sema->getScopeForContext(DC))
+        S->AddDecl(NewNSD);
+      m_Sema->IdResolver.AddDecl(NewNSD);
+    }
 
+    Successful &= VisitNamedDecl(NSD);
     return Successful;
   }
 
   bool DeclReverter::VisitTagDecl(TagDecl* TD) {
     bool Successful = VisitDeclContext(TD);
-    Successful = VisitTypeDecl(TD);
+    Successful &= VisitTypeDecl(TD);
     return Successful;
   }
 

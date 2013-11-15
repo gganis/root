@@ -8,6 +8,7 @@
 
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Basic/Builtins.h"
 #include "clang/Basic/SourceManager.h"
 
 #include "llvm/ADT/SmallString.h"
@@ -39,10 +40,12 @@ namespace cling {
   }
 
   void ClangInternalState::store() {
-    m_LookupTablesOS.reset(createOutputFile("lookup", &m_LookupTablesFile));
-    m_IncludedFilesOS.reset(createOutputFile("included", &m_IncludedFilesFile));
-    m_ASTOS.reset(createOutputFile("ast", &m_ASTFile));
-    m_LLVMModuleOS.reset(createOutputFile("module", &m_LLVMModuleFile));
+    m_LookupTablesOS.reset(createOutputFile("cling-lookup",
+                                            &m_LookupTablesFile));
+    m_IncludedFilesOS.reset(createOutputFile("cling-included", 
+                                             &m_IncludedFilesFile));
+    m_ASTOS.reset(createOutputFile("cling-ast", &m_ASTFile));
+    m_LLVMModuleOS.reset(createOutputFile("cling-module", &m_LLVMModuleFile));
     
     printLookupTables(*m_LookupTablesOS.get(), m_ASTContext);
     printIncludedFiles(*m_IncludedFilesOS.get(), 
@@ -103,9 +106,23 @@ namespace cling {
 
   void ClangInternalState::compare(ClangInternalState& other) {
     std::string differences = "";
+    // Ignore the builtins
+    typedef llvm::SmallVector<const char*, 1024> Builtins;
+    Builtins builtinNames;
+    m_ASTContext.BuiltinInfo.GetBuiltinNames(builtinNames);
+    for (Builtins::iterator I = builtinNames.begin(); 
+         I != builtinNames.end();) {
+      if (llvm::StringRef(*I).startswith("__builtin"))
+        I = builtinNames.erase(I);
+      else
+        ++I;
+    }
+
+    builtinNames.push_back(".*__builtin.*");      
+    
     if (differentContent(m_LookupTablesFile, other.m_LookupTablesFile, 
-                         differences)) {
-      llvm::errs() << "Differences in the lookup tablse\n";
+                         differences, &builtinNames)) {
+      llvm::errs() << "Differences in the lookup tables\n";
       llvm::errs() << differences << "\n";
       differences = "";
     }
@@ -116,7 +133,6 @@ namespace cling {
       llvm::errs() << differences << "\n";
       differences = "";
     }
-
     if (differentContent(m_ASTFile, other.m_ASTFile, differences)) {
       llvm::errs() << "Differences in the AST \n";
       llvm::errs() << differences << "\n";
@@ -132,8 +148,18 @@ namespace cling {
 
   bool ClangInternalState::differentContent(const std::string& file1, 
                                             const std::string& file2, 
-                                            std::string& differences) const {
-    FILE* pipe = popen((m_DiffCommand + file1 + " " + file2).c_str() , "r");
+                                            std::string& differences,
+                const llvm::SmallVectorImpl<const char*>* ignores/*=0*/) const {
+    std::string diffCall = m_DiffCommand;
+    if (ignores) {
+      for (size_t i = 0, e = ignores->size(); i < e; ++i) {
+        diffCall += " --ignore-matching-lines=\".*";
+        diffCall += (*ignores)[i];
+        diffCall += ".*\"";
+      }
+    }
+
+    FILE* pipe = popen((diffCall + " " + file1 + " " + file2).c_str() , "r");
     assert(pipe && "Error creating the pipe");
     assert(differences.empty() && "Must be empty");
 
@@ -149,12 +175,17 @@ namespace cling {
 
   class DumpLookupTables : public RecursiveASTVisitor<DumpLookupTables> {
   private:
-    //llvm::raw_ostream& m_OS;
+    llvm::raw_ostream& m_OS;
   public:
-    //DumpLookupTables(llvm::raw_ostream& OS) : m_OS(OS) { }
-    DumpLookupTables(llvm::raw_ostream&) { }
+    DumpLookupTables(llvm::raw_ostream& OS) : m_OS(OS) { }
+    bool VisitDecl(Decl* D) {
+      if (DeclContext* DC = dyn_cast<DeclContext>(D))
+        VisitDeclContext(DC);
+      return true;
+    }
+
     bool VisitDeclContext(DeclContext* DC) {
-      //DC->dumpLookups(m_OS);
+      DC->dumpLookups(m_OS);
       return true;
     }
   };
