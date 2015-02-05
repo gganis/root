@@ -1,5 +1,5 @@
 // @(#)root/proofplayer:$Id$
-// Author: Maarten Ballintijn    18/03/02
+// Author: G Ganis 2/2015
 
 /*************************************************************************
  * Copyright (C) 1995-2002, Rene Brun and Fons Rademakers.               *
@@ -9,22 +9,139 @@
  * For the list of contributors see $ROOTSYS/README/CREDITS.             *
  *************************************************************************/
 
-#ifndef ROOT_TPacketizer
-#define ROOT_TPacketizer
+#ifndef ROOT_TPackFNode
+#define ROOT_TPackFNode
 
 //////////////////////////////////////////////////////////////////////////
 //                                                                      //
-// TPacketizer                                                          //
+// TPackFNode                                                           //
 //                                                                      //
-// This class generates packets to be processed on PROOF slave servers. //
-// A packet is an event range (begin entry and number of entries) or    //
-// object range (first object and number of objects) in a TTree         //
-// (entries) or a directory (objects) in a file.                        //
-// Packets are generated taking into account the performance of the     //
-// remote machine, the time it took to process a previous packet on     //
-// the remote machine, the locality of the database files, etc.         //
+// Packetizer auxilliary class to describe a file node                  //
 //                                                                      //
 //////////////////////////////////////////////////////////////////////////
+
+
+class TPackFNode : public TNamed {
+
+private:
+   TList         *fFiles;           //  Files to be processed from this node
+   TObject       *fNext;            //! Cursor in fFiles
+   TList         *fActFiles;        //  Files still to be processed
+   TObject       *fActFNext;        //! Cursor in fActFiles
+   Int_t          fActWrks;         //  Number of workers processing from this node
+   Int_t          fActWrksLoc;      //  Number of local workers processing files from this node
+
+public:
+   TFileNode(const char *name);
+   ~TPackFNode() { delete fFiles; delete fActFiles; }
+
+   // We may need sorting
+   Bool_t       IsSortable() const { return kTRUE; }
+ 
+   // Worker counters
+   void          IncNWrks(Bool_t local = kFALSE) { if (local) { fActWrksLoc++}; fActWrks++; }
+   void          DecNWrks(Bool_t local = kFALSE) { if (local) { fActWrksLoc--}; fActWrks--; }
+   inline Int_t  GetNWrks(Bool_t local = kFALSE) const { return (local) ? fActWrksLoc : fActWrks ; }
+
+   // Locality measure
+   inline Bool_t IsLocal(const char *worker) const { return (worker == fName) ? kTRUE : kFALSE; }
+
+   // File counters
+   inline Int_t  GetNFiles const { return fFiles->GetSize(); }
+   inline Int_t  GetNActFiles const { return fActFiles->GetSize(); }
+
+
+   void        IncMySlaveCnt() { fMySlaveCnt++; }
+   void        IncSlaveCnt(const char *slave) { if (fNodeName != slave) fSlaveCnt++; }
+   void        DecSlaveCnt(const char *slave) { if (fNodeName != slave) fSlaveCnt--; R__ASSERT(fSlaveCnt >= 0); }
+   Int_t       GetSlaveCnt() const {return fMySlaveCnt + fSlaveCnt;}
+   Int_t       GetNumberOfActiveFiles() const { return fActFiles->GetSize(); }
+
+   const char *GetName() const { return fNodeName.Data(); }
+
+   void Add(TDSetElement *elem)
+   {
+      TFileStat *f = new TFileStat(this,elem);
+      fFiles->Add(f);
+      if (fUnAllocFileNext == 0) fUnAllocFileNext = fFiles->First();
+   }
+
+   TFileStat *GetNextUnAlloc()
+   {
+      TObject *next = fUnAllocFileNext;
+
+      if (next != 0) {
+         // make file active
+         fActFiles->Add(next);
+         if (fActFileNext == 0) fActFileNext = fActFiles->First();
+
+         // move cursor
+         fUnAllocFileNext = fFiles->After(fUnAllocFileNext);
+      }
+
+      return (TFileStat *) next;
+   }
+
+   TFileStat *GetNextActive()
+   {
+      TObject *next = fActFileNext;
+
+      if (fActFileNext != 0) {
+         fActFileNext = fActFiles->After(fActFileNext);
+         if (fActFileNext == 0) fActFileNext = fActFiles->First();
+      }
+
+      return (TFileStat *) next;
+   }
+
+   void RemoveActive(TFileStat *file)
+   {
+      if (fActFileNext == file) fActFileNext = fActFiles->After(file);
+      fActFiles->Remove(file);
+      if (fActFileNext == 0) fActFileNext = fActFiles->First();
+   }
+
+   Int_t Compare(const TObject *other) const
+   {
+      // Must return -1 if this is smaller than obj, 0 if objects are equal
+      // and 1 if this is larger than obj.
+      const TPackFNode *obj = dynamic_cast<const TPackFNode*>(other);
+      if (!obj) {
+         Error("Compare", "input is not a TPacketizer::TPackFNode object");
+         return 0;
+      }
+
+      Int_t myVal = GetSlaveCnt();
+      Int_t otherVal = obj->GetSlaveCnt();
+      if (myVal < otherVal) {
+         return -1;
+      } else if (myVal > otherVal) {
+         return 1;
+      } else {
+         return 0;
+      }
+   }
+
+   void Print(Option_t *) const
+   {
+      cout << "OBJ: " << IsA()->GetName() << "\t" << fNodeName
+           << "\tMySlaveCount " << fMySlaveCnt
+           << "\tSlaveCount " << fSlaveCnt << endl;
+   }
+
+   void Reset()
+   {
+      fUnAllocFileNext = fFiles->First();
+      fActFiles->Clear();
+      fActFileNext = 0;
+      fSlaveCnt = 0;
+      fMySlaveCnt = 0;
+   }
+};
+
+
+
+
 
 #ifndef ROOT_TVirtualPacketizer
 #include "TVirtualPacketizer.h"
