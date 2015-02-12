@@ -376,6 +376,7 @@ TPacketizer::TPacketizer(TDSet *dset, TList *slaves, Long64_t first,
    fSlaveStats = new TMap;
    fSlaveStats->SetOwner(kFALSE);
 
+#if 0
    TSlave *slave;
    TIter si(slaves);
    while ((slave = (TSlave*) si.Next())) {
@@ -383,6 +384,13 @@ TPacketizer::TPacketizer(TDSet *dset, TList *slaves, Long64_t first,
       fMaxPerfIdx = slave->GetPerfIdx() > fMaxPerfIdx ?
          slave->GetPerfIdx() : fMaxPerfIdx;
    }
+#else
+   // Enable heuristic calculation later
+   ResetBit(kHeuristicPSiz);
+   // Record initial available workers
+   Int_t nwrks = AddWorkers(slaves);
+   Info("TPacketizer", "Initial number of workers: %d", nwrks);
+#endif
 
    // Setup file & filenode structure
    Reset();
@@ -560,6 +568,7 @@ TPacketizer::TPacketizer(TDSet *dset, TList *slaves, Long64_t first,
       Info("Process","using alternate packet size: %lld", fPacketSize);
    } else {
       // Heuristic for starting packet size
+      SetBit(kHeuristicPSiz);
       Int_t nslaves = fSlaveStats->GetSize();
       if (nslaves > 0) {
          fPacketSize = fTotalEntries / (fPacketAsAFraction * nslaves);
@@ -591,6 +600,41 @@ TPacketizer::~TPacketizer()
    SafeDelete(fUnAllocated);
    SafeDelete(fActive);
    SafeDelete(fFileNodes);
+}
+
+//______________________________________________________________________________
+Int_t TPacketizer::AddWorkers(TList *workers)
+{
+   // Adds new workers. Returns the number of workers added, or -1 on failure.
+
+   if (!workers) {
+      Error("AddWorkers", "Null list of new workers!");
+      return -1;
+   }
+
+   Int_t curNumOfWrks = fSlaveStats->GetEntries();
+
+   TSlave *sl;
+   TIter next(workers);
+   while (( sl = dynamic_cast<TSlave*>(next()) ))
+      if (!fSlaveStats->FindObject(sl)) {
+         fSlaveStats->Add(sl, new TSlaveStat(sl));
+         fMaxPerfIdx = sl->GetPerfIdx() > fMaxPerfIdx ? sl->GetPerfIdx() : fMaxPerfIdx;
+      }
+
+   // If heuristic (and new workers) set the packet size
+   Int_t nwrks = fSlaveStats->GetSize();
+   if (TestBit(kHeuristicPSiz) && nwrks > curNumOfWrks) {
+      if (nwrks > 0) {
+         fPacketSize = fTotalEntries / (fPacketAsAFraction * nwrks);
+         if (fPacketSize < 1) fPacketSize = 1;
+      } else {
+         fPacketSize = 1;
+      }
+   }
+
+   // Done
+   return nwrks;
 }
 
 //______________________________________________________________________________

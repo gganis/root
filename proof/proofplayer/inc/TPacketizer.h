@@ -45,6 +45,11 @@ public:              // public because of Sun CC bug
    class TFileStat;
    class TSlaveStat;
 
+   // TPacketizer status bits
+   enum EStatusBits {
+      kHeuristicPSiz   = BIT(15)
+   };
+
 private:
    TList    *fPackets;      // all processed packets
 
@@ -89,6 +94,7 @@ public:
                 TList *input, TProofProgressStatus *st);
    virtual ~TPacketizer();
 
+   Int_t         AddWorkers(TList *workers);
    TDSetElement *GetNextPacket(TSlave *sl, TMessage *r);
    Long64_t      GetEntriesProcessed(TSlave *sl) const;
 
