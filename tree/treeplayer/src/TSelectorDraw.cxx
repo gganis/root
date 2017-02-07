@@ -77,6 +77,8 @@ TSelectorDraw::TSelectorDraw()
    fWeight         = 1;
    fCurrentSubEntry = -1;
    fTreeElistArray  = 0;
+
+   ResetBit(TSelector::kIsInitialized);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -99,15 +101,39 @@ TSelectorDraw::~TSelectorDraw()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+// Called everytime a new file is open (by PROOF or MultiProc)
+
+void TSelectorDraw::Init(TTree *tree)
+{
+   InitVar(tree);
+
+   if (tree) {
+      fTree = tree;
+      for (Int_t i = 0; i < fDimension; ++i) {
+         if (fVar[i]) fVar[i]->SetTree(tree);
+      }
+      if (fSelect) fSelect->SetTree(tree);
+   }
+}
+
+////////////////////////////////////////////////////////////////////////////////
 /// Called every time a loop on the tree(s) starts.
 
-void TSelectorDraw::Begin(TTree *tree)
+void TSelectorDraw::InitVar(TTree *tree)
 {
    SetStatus(0);
    ResetAbort();
    ResetBit(kCustomHistogram);
    fSelectedRows   = 0;
-   fTree = tree;
+   if (tree) {
+      fTree = tree;
+   } else {
+      TNamed *tn = (TNamed *) fInput->FindObject("treename");
+      if (tn) {
+         fTree = (TTree *) fInput->FindObject(tn->GetTitle());
+      }
+   }
+
    fDimension = 0;
    fAction = 0;
 
@@ -1167,24 +1193,24 @@ Bool_t TSelectorDraw::Notify()
 ////////////////////////////////////////////////////////////////////////////////
 /// Called in the entry loop for all entries accepted by Select.
 
-void TSelectorDraw::ProcessFill(Long64_t entry)
+Bool_t TSelectorDraw::Process(Long64_t entry)
 {
    if (fObjEval) {
       ProcessFillObject(entry);
-      return;
+      return kTRUE;
    }
 
    if (fMultiplicity) {
       ProcessFillMultiple(entry);
-      return;
+      return kTRUE;
    }
 
    // simple case with no multiplicity
-   if (fForceRead && fManager->GetNdata() <= 0) return;
+   if (fForceRead && fManager->GetNdata() <= 0) return kTRUE;
 
    if (fSelect) {
       fW[fNfill] = fWeight * fSelect->EvalInstance(0);
-      if (!fW[fNfill]) return;
+      if (!fW[fNfill]) return kTRUE;
    } else fW[fNfill] = fWeight;
    if (fVal) {
       for (Int_t i = 0; i < fDimension; ++i) {
@@ -1196,6 +1222,7 @@ void TSelectorDraw::ProcessFill(Long64_t entry)
       TakeAction();
       fNfill = 0;
    }
+   return kTRUE;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1816,11 +1843,20 @@ void TSelectorDraw::TakeEstimate()
 ////////////////////////////////////////////////////////////////////////////////
 /// Called at the end of a loop on a TTree.
 
-void TSelectorDraw::Terminate()
+void TSelectorDraw::SlaveTerminate()
 {
    if (fNfill) TakeAction();
+   if (fObject) fOutput->Add(fObject->Clone());
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// Called at the end of a loop on a TTree.
+
+void TSelectorDraw::Terminate()
+{
 
    if ((fSelectedRows == 0) && (TestBit(kCustomHistogram) == 0)) fDraw = 1; // do not draw
 
    SetStatus(fSelectedRows);
 }
+

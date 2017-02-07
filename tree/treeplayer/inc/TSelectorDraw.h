@@ -65,6 +65,7 @@ protected:
    virtual void      ClearFormula();
    virtual Bool_t    CompileVariables(const char *varexp="", const char *selection="");
    virtual void      InitArrays(Int_t newsize);
+   virtual void      InitVar(TTree *tree);
 
 private:
    TSelectorDraw(const TSelectorDraw&);             // not implemented
@@ -74,7 +75,8 @@ public:
    TSelectorDraw();
    virtual ~TSelectorDraw();
 
-   virtual void      Begin(TTree *tree);
+   virtual void      Init(TTree *tree);
+   virtual void      SlaveTerminate();
    virtual Int_t     GetAction() const {return fAction;}
    virtual Bool_t    GetCleanElist() const {return fCleanElist;}
    virtual Int_t     GetDimension() const {return fDimension;}
@@ -106,8 +108,7 @@ public:
    virtual Double_t *GetV4() const   {return GetVal(3);}
    virtual Double_t *GetW() const    {return fW;}
    virtual Bool_t    Notify();
-   virtual Bool_t    Process(Long64_t /*entry*/) { return kFALSE; }
-   virtual void      ProcessFill(Long64_t entry);
+   virtual Bool_t    Process(Long64_t /*entry*/);
    virtual void      ProcessFillMultiple(Long64_t entry);
    virtual void      ProcessFillObject(Long64_t entry);
    virtual void      SetEstimate(Long64_t n);
@@ -116,7 +117,9 @@ public:
    virtual void      TakeEstimate();
    virtual void      Terminate();
 
-   ClassDef(TSelectorDraw,1);  //A specialized TSelector for TTree::Draw
+   int         Version() const { return 2; }
+
+   ClassDef(TSelectorDraw,2);  //A specialized TSelector for TTree::Draw
 };
 
 #endif
