@@ -259,6 +259,44 @@ Bool_t TSelector::IsStandardDraw(const char *selec)
    return stdselec;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/// Make sure that the output list is equal (content wise) to 'output', making
+/// sure that objects already present in the existing output list are not counted
+/// twice or improperly double delected.
+/// In particular, if 'output' is nullptr or empty, reset the internal list.
+/// On return, the caller is responsible of output as container: its content is 
+/// transferred under the selector ownership.
+
+void TSelector::SetOutputList(TList *output) {
+
+   // Reset the list, if required
+   if (!output || output->GetSize() <= 0) {
+      fOutput->Delete();
+      return;
+   }
+
+   TObject *o;
+
+   // Remove from new list objects already existing locally
+   TIter nxexo(fOutput);
+   while ((o = nxexo())) {
+      if (output->FindObject(o)) output->Remove(o);
+   }
+
+   // Transfer remaining objects
+   TIter nxo(output);
+   while ((o = nxo())) {
+      fOutput->Add(o);
+   }
+
+   // Cleanup original list
+   output->SetOwner(kFALSE);
+   output->Clear("nodelete");
+
+   // Done
+   return;
+}
+
 Bool_t TSelector::ProcessCut(Long64_t /*entry*/)
 {
    //    This method is called before processing entry. It is the user's responsability to read

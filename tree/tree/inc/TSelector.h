@@ -65,6 +65,7 @@ public:
    virtual void        SetOption(const char *option) { fOption = option; }
    virtual void        SetObject(TObject *obj) { fObject = obj; }
    virtual void        SetInputList(TList *input) { fInput = input; }
+   virtual void        SetOutputList(TList *output);
    virtual void        SetStatus(Long64_t status) { fStatus = status; }
    virtual TList      *GetInputList() const { return fInput; }
    virtual TList      *GetOutputList() const { return fOutput; }
