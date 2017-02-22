@@ -129,19 +129,14 @@ TList* TTreeProcessorMP::Process(TTree& tree, TSelector& selector, ULong64_t nTo
    PoolUtils::ReduceObjects<TObject *> redfunc;
    auto outList = static_cast<TList*>(redfunc(outLists));
 
-   TList *selList = selector.GetOutputList();
-   for(auto obj : *outList) {
-      selList->Add(obj);
-   }
-   outList->SetOwner(false);
-   delete outList;
+   selector.SetOutputList(outList);
 
    selector.Terminate();
 
    //clean-up and return
    ReapWorkers();
    fTaskType = ETask::kNoTask;
-   return outList;
+   return selector.GetOutputList();
 }
 
 //////////////////////////////////////////////////////////////////////////
@@ -210,20 +205,15 @@ TList* TTreeProcessorMP::Process(const std::vector<std::string>& fileNames, TSel
    PoolUtils::ReduceObjects<TObject *> redfunc;
    auto outList = static_cast<TList*>(redfunc(outLists));
 
-   TList *selList = selector.GetOutputList();
-   for(auto obj : *outList) {
-      selList->Add(obj);
-   }
-   outList->SetOwner(false);
-   delete outList;
+   selector.SetOutputList(outList);
 
    selector.Terminate();
 
    //clean-up and return
    ReapWorkers();
    fTaskType = ETask::kNoTask;
-   return outList;
 
+   return selector.GetOutputList();
 }
 
 //////////////////////////////////////////////////////////////////////////
