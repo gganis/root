@@ -402,6 +402,9 @@ set(cppunit)
 set(gccxml)
 set(dicttype ${ROOT_DICTTYPE})
 
+include(CheckFunctionExists)
+check_function_exists(setresuid HAVE_SETRESUID)
+
 #---RConfigure-------------------------------------------------------------------------------------------------
 set(hasON define)
 set(hasOFF undef)
@@ -410,7 +413,7 @@ set(hasoff undef)
 set(has1 define)
 set(has0 undef)
 set(has undef)
-set(setresuid undef)
+set(setresuid  ${has${HAVE_SETRESUID}})
 set(hasmathmore ${has${mathmore}})
 set(haspthread ${has${CMAKE_USE_PTHREADS_INIT}})
 set(hasxft ${has${xft}})
