@@ -84,6 +84,7 @@ extra libraries (Histogram, display, etc).
 #include "Fit/UnBinData.h"
 #include "Math/MinimizerOptions.h"
 
+#include "ROOT/TTreeProcessorMP.hxx"
 
 
 R__EXTERN Foption_t Foption;
@@ -416,7 +417,20 @@ Long64_t TTreePlayer::DrawSelect(const char *varexp0, const char *selection, Opt
    if (nentries > fTree->GetMaxEntryLoop()) nentries = fTree->GetMaxEntryLoop();
 
    // invoke the selector
-   Long64_t nrows = Process(fSelector,option,nentries,firstentry);
+   Bool_t do_mp = gEnv->GetValue("TTreePlayer.MultiProc", 0);
+   Long64_t nrows = -1;
+   if (do_mp &&
+      (!optpara && !optcandle && !optgl5d)) {
+      // Go parallel
+      fSelector->SetOption(option);
+      fSelector->Init(fTree);
+      ROOT::TTreeProcessorMP pool(2); 
+      pool.Process(*fTree, *fSelector);
+      nrows = fSelector->GetStatus();
+   } else {
+      // Special option: parallel processing not yet supported
+      nrows = Process(fSelector,option,nentries,firstentry);
+   }
    fSelectedRows = nrows;
    fDimension = fSelector->GetDimension();
 
