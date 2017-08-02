@@ -257,8 +257,10 @@ void TMPWorkerTreeSel::Process(UInt_t code, MPCodeBufPair &msg)
 
    fSelector.Init(fTree);
    fSelector.Notify();
+   Info("Process", "fst:%lld, lst:%lld, ent: %lld", start, finish, finish - start + 1);
    for (Long64_t entry = start; entry < finish; ++entry) {
       Long64_t e = (enl) ? enl->GetEntry(entry) : entry;
+      fTree->LoadTree(e);
       fSelector.Process(e);
    }
 
@@ -286,6 +288,9 @@ Int_t TMPWorkerTree::LoadTree(UInt_t code, MPCodeBufPair &msg, Long64_t &start, 
    UInt_t nProcessed = 0;
    Bool_t setupcache = true;
 
+   Long64_t nEntries = 0;
+   Long64_t nBunch = 0;
+
    std::string mgroot = "[S" + std::to_string(GetNWorker()) + "]: ";
 
    TTree *tree = 0;
@@ -305,8 +310,8 @@ Int_t TMPWorkerTree::LoadTree(UInt_t code, MPCodeBufPair &msg, Long64_t &start, 
       //create entries range
       //example: for 21 entries, 4 workers we want ranges 0-5, 5-10, 10-15, 15-21
       //and this worker must take the rangeN-th range
-      Long64_t nEntries = fTree->GetEntries();
-      UInt_t nBunch = nEntries / fNWorkers;
+      nEntries = fTree->GetEntries();
+      nBunch = nEntries / fNWorkers;
       UInt_t rangeN = nProcessed % fNWorkers;
       start = rangeN * nBunch;
       if (rangeN < (fNWorkers - 1)) {
@@ -317,8 +322,8 @@ Int_t TMPWorkerTree::LoadTree(UInt_t code, MPCodeBufPair &msg, Long64_t &start, 
 
       //process tree
       tree = fTree;
-      CloseFile(); // May not be needed
       if (fTree->GetCurrentFile()) {
+         CloseFile(); // May not be needed
          // We need to reopen the file locally (TODO: to understand and fix this)
          if ((fFile = TFile::Open(fTree->GetCurrentFile()->GetName())) && !fFile->IsZombie()) {
             if (!(tree = (TTree *) fFile->Get(fTree->GetName()))) {
@@ -335,6 +340,8 @@ Int_t TMPWorkerTree::LoadTree(UInt_t code, MPCodeBufPair &msg, Long64_t &start, 
             return -1;
          }
       }
+      // The largest bunch
+      fTree->SetEstimate(nBunch + nEntries % nBunch);
 
    } else {
 
@@ -383,15 +390,18 @@ Int_t TMPWorkerTree::LoadTree(UInt_t code, MPCodeBufPair &msg, Long64_t &start, 
       if (code == MPCode::kProcRange) {
          //example: for 21 entries, 4 workers we want ranges 0-5, 5-10, 10-15, 15-21
          //and this worker must take the rangeN-th range
-         Long64_t nEntries = tree->GetEntries();
-         UInt_t nBunch = nEntries / fNWorkers;
+         nEntries = tree->GetEntries();
+         nBunch = nEntries / fNWorkers;
          if(nEntries % fNWorkers) nBunch++;
          UInt_t rangeN = nProcessed % fNWorkers;
          start = rangeN * nBunch;
-         if(rangeN < (fNWorkers-1))
+         if(rangeN < (fNWorkers-1)) {
             finish = (rangeN+1)*nBunch;
-         else
+         } else {
             finish = nEntries;
+         }
+         // The largest bunch
+         fTree->SetEstimate(nBunch + nEntries % nBunch);
       } else {
          start = 0;
          finish = tree->GetEntries();
@@ -408,8 +418,8 @@ Int_t TMPWorkerTree::LoadTree(UInt_t code, MPCodeBufPair &msg, Long64_t &start, 
          if (code == MPCode::kProcRange) {
             // example: for 21 entries, 4 workers we want ranges 0-5, 5-10, 10-15, 15-21
             // and this worker must take the rangeN-th range
-            ULong64_t nEntries = (*enl)->GetN();
-            UInt_t nBunch = nEntries / fNWorkers;
+            nEntries = (*enl)->GetN();
+            nBunch = nEntries / fNWorkers;
             if (nEntries % fNWorkers) nBunch++;
             UInt_t rangeN = nProcessed % fNWorkers;
             start = rangeN * nBunch;
@@ -421,6 +431,8 @@ Int_t TMPWorkerTree::LoadTree(UInt_t code, MPCodeBufPair &msg, Long64_t &start, 
             start = 0;
             finish = (*enl)->GetN();
          }
+         // The largest bunch
+         fTree->SetEstimate(nBunch + nEntries % nBunch);
       } else {
          Warning("LoadTree", "failed to get entry list for: %s %s", fTree->GetName(), TUrl(fFile->GetName()).GetFile());
       }
