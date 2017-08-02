@@ -35,6 +35,8 @@ A specialized TSelector for TTree::Draw.
 #include "TStyle.h"
 #include "TClass.h"
 #include "TColor.h"
+#include "TParameter.h"
+#include "TSystem.h"
 
 ClassImp(TSelectorDraw);
 
@@ -1846,8 +1848,20 @@ void TSelectorDraw::TakeEstimate()
 void TSelectorDraw::SlaveTerminate()
 {
    if (fNfill) TakeAction();
-   if (fObject) fOutput->Add(fObject->Clone());
+   fOutput->Add(new TParameter<Long64_t>("SelectedRows", fSelectedRows)); 
+   if (fObject) {
+      TObject *nobj = fObject->Clone();
+      if (nobj->IsA()->InheritsFrom("TNamed")) {
+         TNamed *named = (TNamed *)nobj;
+         TString nn;
+         nn.Form("%s-%d", named->GetName(), gSystem->GetPid());
+         named->SetName(nn.Data());
+      }
+      fOutput->Add(nobj);
+      nobj->Print("base");
+   }
 }
+
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Called at the end of a loop on a TTree.
@@ -1858,5 +1872,12 @@ void TSelectorDraw::Terminate()
    if ((fSelectedRows == 0) && (TestBit(kCustomHistogram) == 0)) fDraw = 1; // do not draw
 
    SetStatus(fSelectedRows);
+
+   fOutput->Print("base");
+   if (fOutput->GetSize() > 0) {
+      if (strcmp(fOutput->Last()->GetName(), "SelectedRows")) fObject = fOutput->Last();
+   }
+   fDraw = 0;
+
 }
 
