@@ -49,9 +49,9 @@ protected:
    void         CloseFile();
    ULong64_t    EvalMaxEntries(ULong64_t maxEntries);
    void         HandleInput(MPCodeBufPair& msg); ///< Execute instructions received from a MP client
-   void Init(int fd, UInt_t workerN);
-   Int_t LoadTree(UInt_t code, MPCodeBufPair &msg, Long64_t &start, Long64_t &finish, TEntryList **enl,
-                  std::string &errmsg);
+   void         Init(int fd, UInt_t workerN);
+   Int_t        LoadTree(UInt_t code, MPCodeBufPair &msg, Long64_t &start, Long64_t &finish, TEntryList **enl,
+                         std::string &errmsg);
    TFile       *OpenFile(const std::string& fileName);
    virtual void Process(UInt_t, MPCodeBufPair &) {}
    TTree       *RetrieveTree(TFile *fp);
