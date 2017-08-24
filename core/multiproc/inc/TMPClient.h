@@ -20,6 +20,8 @@
 #include <unistd.h> //pid_t
 #include <vector>
 
+class THashList;
+
 class TMPClient {
 public:
    explicit TMPClient(unsigned nWorkers = 0);
@@ -42,12 +44,14 @@ public:
    void Remove(TSocket *s);
    void ReapWorkers();
    void HandleMPCode(MPCodeBufPair &msg, TSocket *sender);
+   void HandleHistSync(MPCodeBufPair &msg,  TSocket *sender);
 
 private:
    bool fIsParent; ///< This is true if this is the parent/client process, false if this is a child/worker process
    std::vector<pid_t> fWorkerPids; ///< A vector containing the PIDs of children processes/workers
    TMonitor fMon; ///< This object manages the sockets and detect socket events via TMonitor::Select
    unsigned fNWorkers; ///< The number of workers that should be spawned upon forking
+   THashList *fRefSyncs; ///< List of reference objects (e.g. to be synchronized between workers) 
 };
 
 

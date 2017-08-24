@@ -12,12 +12,17 @@
 
 #include "MPCode.h"
 #include "MPSendRecv.h"
+#include "TBufferFile.h"
 #include "TEnv.h"
 #include "TError.h"
 #include "TMPWorker.h"
 #include "TSystem.h"
 #include <memory> //unique_ptr
 #include <string>
+
+#include "TH1.h"
+#include "TH2.h"
+#include "TH3.h"
 
 #include <iostream>
 
@@ -44,6 +49,36 @@
 ///
 //////////////////////////////////////////////////////////////////////////
 
+
+//////////////////////////////////////////////////////////////////////////
+/// Callbacks for histogram synchronization
+TList *syncHRangeSock(void *ctx, TList *l)
+{
+   // Set the socket
+   TSocket *s = (TSocket *)ctx;
+   if (!s) return (TList *)0;
+
+   MPSend(s, MPCode::kHistSync, l);
+
+   TList *rl = nullptr;
+
+   MPCodeBufPair msg = MPRecv(s);
+   if (msg.first == MPCode::kHistSyncOk) {
+   } else if (msg.first == MPCode::kHistSync) {
+      rl = ReadBuffer<TList *>(msg.second.get());
+   } else {
+      if (msg.first == MPCode::kRecvError) {
+         ::Fatal("syncHRangeSock", "lost connection to client - exiting");
+         gSystem->Exit(0);
+      } else {
+         ::Warning("syncHRangeSock", "unknown code received: %d", msg.first);
+      }
+   }
+   // Done
+   return rl;
+}
+
+
 //////////////////////////////////////////////////////////////////////////
 /// This method is called by children processes right after forking.
 /// Initialization of worker properties that must be delayed until after
@@ -58,6 +93,8 @@ void TMPWorker::Init(int fd, unsigned workerN)
    fPid = getpid();
    fNWorker = workerN;
    fId = "W" + std::to_string(GetNWorker()) + "|P" + std::to_string(GetPid());
+   // Synchronizers for histograms
+   TH1::SetGlobalCallbackFunc(GetSocket(), syncHRangeSock);
 }
 
 

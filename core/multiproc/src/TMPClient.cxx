@@ -12,6 +12,7 @@
 #include "MPCode.h"
 #include "TGuiFactory.h" //gGuiFactory
 #include "TError.h" //gErrorIgnoreLevel
+#include "THashList.h"
 #include "TMPClient.h"
 #include "TMPWorker.h"
 #include "TROOT.h" //gROOT
@@ -48,7 +49,7 @@
 /// of cores of the machine is going to be spawned. If that information is
 /// not available, 2 workers are created instead.
 /// \endparblock
-TMPClient::TMPClient(unsigned nWorkers) : fIsParent(true), fWorkerPids(), fMon(), fNWorkers(0)
+TMPClient::TMPClient(unsigned nWorkers) : fIsParent(true), fWorkerPids(), fMon(), fNWorkers(0), fRefSyncs(0)
 {
    // decide on number of workers
    if (nWorkers) {
@@ -332,7 +333,9 @@ void TMPClient::HandleMPCode(MPCodeBufPair &msg, TSocket *s)
    //message contains server's pid. retrieve it
    const char *str = ReadBuffer<const char*>(msg.second.get());
 
-   if (code == MPCode::kMessage) {
+   if (code == MPCode::kHistSync) {
+      HandleHistSync(msg, s);
+   } else if (code == MPCode::kMessage) {
       Error("TMPClient::HandleMPCode", "[I][C] message received: %s\n", str);
    } else if (code == MPCode::kError) {
       Error("TMPClient::HandleMPCode", "[E][C] error message received: %s\n", str);   
@@ -343,4 +346,35 @@ void TMPClient::HandleMPCode(MPCodeBufPair &msg, TSocket *s)
    } else
        Error("TMPClient::HandleMPCode", "[W][C] unknown code received. code=%d\n", code);
    delete [] str;
+}
+
+//////////////////////////////////////////////////////////////////////////
+/// Handle messages containing histogram synchronization information
+/// \param msg the MPCodeBufPair returned by a MPRecv call
+/// \param s
+/// \parblock
+/// a pointer to the socket from which the message has been received is passed.
+/// This way HandleHistSync knows which socket to reply on.
+/// \endparblock
+void TMPClient::HandleHistSync(MPCodeBufPair &msg, TSocket *s)
+{
+
+   TBufferFile *b = msg.second.get();
+   b->SetBufferOffset(0);
+   TList *l = (TList *) b->ReadObjectAny(TList::Class());
+
+   if (!fRefSyncs) fRefSyncs = new THashList();
+   R__ASSERT(fRefSyncs);
+
+   TObject *o = 0;
+   if (!(o = fRefSyncs->FindObject(l->GetName()))) {
+      fRefSyncs->Add(l);
+      MPSend(s, MPCode::kHistSyncOk);
+   } else {
+      if (o->InheritsFrom("TList")) {
+         MPSend(s, MPCode::kHistSync, o);
+      } else {
+         MPSend(s, MPCode::kError);
+      }
+   }
 }

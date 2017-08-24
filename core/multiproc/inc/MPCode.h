@@ -48,7 +48,10 @@ namespace MPCode {
       kFatalError,      ///< Fatal error: whoever sends this message is terminating execution
       kShutdownOrder,   ///< Used by the client to tell servers to shutdown
       kShutdownNotice,  ///< Used by the workers to notify client of shutdown
-      kRecvError        ///< Error while reading from the socket
+      kRecvError,       ///< Error while reading from the socket
+      /* Histogram synchronization */
+      kHistSync = 3000, ///< Synchronization request message
+      kHistSyncOk       ///< Synchronization Ok message
    };
 }
 
