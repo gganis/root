@@ -41,6 +41,8 @@
 
 #include "TFitResultPtr.h"
 
+#include "TRWLock.h"
+
 #include <float.h>
 
 class TF1;
@@ -51,6 +53,9 @@ class TList;
 class TCollection;
 class TVirtualFFT;
 class TVirtualHistPainter;
+
+
+typedef TList *(*CallbackFunc_t)(void *ctx, TList *buf);
 
 
 class TH1 : public TNamed, public TAttLine, public TAttFill, public TAttMarker {
@@ -101,10 +106,17 @@ protected:
     Double_t     *fIntegral;        ///<!Integral of bins used by GetRandom
     TVirtualHistPainter *fPainter;  ///<!pointer to histogram painter
     EBinErrorOpt  fBinStatErrOpt;   ///< option for bin statistical errors
+    void         *fCallbackCtx;     ///<!Context for the function to be called back
+    CallbackFunc_t fCallbackFunc;   ///<!Function to be called back, for example to get ranges
     static Int_t  fgBufferSize;     ///<!default buffer size for automatic histograms
     static Bool_t fgAddDirectory;   ///<!flag to add histograms to the directory
     static Bool_t fgStatOverflows;  ///<!flag to use under/overflows in statistics
     static Bool_t fgDefaultSumw2;   ///<!flag to call TH1::Sumw2 automatically at histogram creation time
+
+    static void  *fgCallbackCtx;     ///<!Global context setting for the function to be called back
+    static CallbackFunc_t fgCallbackFunc;   ///<!Global callback function setting, for example to get ranges
+    static TRWLock fgRefSyncMtx;     ///<Protection of fgRefSync
+    static THashList *fgRefSync;    ///<Ra=neg synchronisation information
 
 public:
    static Int_t FitOptionsMake(Option_t *option, Foption_t &Foption);
@@ -134,6 +146,12 @@ protected:
                                Option_t * opt, Bool_t doerr = kFALSE) const;
 
    virtual void     DoFillN(Int_t ntimes, const Double_t *x, const Double_t *w, Int_t stride=1);
+
+   virtual void     RecalculateAxes(Double_t *b, Int_t n);
+   virtual TList   *GetListWithRanges(const char *n);
+   virtual TString  GetNameForRanges();
+   virtual Bool_t   HasNoLimits();
+   virtual Int_t    SetRangesFromList(TList *axl);
 
    static bool CheckAxisLimits(const TAxis* a1, const TAxis* a2);
    static bool CheckBinLimits(const TAxis* a1, const TAxis* a2);
@@ -175,6 +193,7 @@ public:
    static  void     AddDirectory(Bool_t add=kTRUE);
    static  Bool_t   AddDirectoryStatus();
    virtual void     Browse(TBrowser *b);
+   virtual Int_t    BufferEmpty(Int_t action=0);
    virtual Bool_t   CanExtendAllAxes() const;
    virtual Double_t Chi2Test(const TH1* h2, Option_t *option = "UU", Double_t *res = 0) const;
    virtual Double_t Chi2TestX(const TH1* h2, Double_t &chi2, Int_t &ndf, Int_t &igood,Option_t *option = "UU",  Double_t *res = 0) const;
@@ -192,7 +211,6 @@ public:
    virtual TH1     *DrawCopy(Option_t *option="", const char * name_postfix = "_copy") const;
    virtual TH1     *DrawNormalized(Option_t *option="", Double_t norm=1) const;
    virtual void     DrawPanel(); // *MENU*
-   virtual Int_t    BufferEmpty(Int_t action=0);
    virtual void     Eval(TF1 *f1, Option_t *option="");
    virtual void     ExecuteEvent(Int_t event, Int_t px, Int_t py);
    virtual void     ExtendAxis(Double_t x, TAxis *axis);
@@ -353,6 +371,11 @@ public:
    virtual void     SetBinsLength(Int_t = -1) { } //redefined in derived classes
    virtual void     SetBinErrorOption(EBinErrorOpt type) { fBinStatErrOpt = type; }
    virtual void     SetBuffer(Int_t buffersize, Option_t *option="");
+
+   // Callback function
+           void     SetCallbackFunc(void *c, CallbackFunc_t f) { fCallbackCtx = c; fCallbackFunc = f; }
+   static  void     SetGlobalCallbackFunc(void *c, CallbackFunc_t f);
+
    virtual UInt_t   SetCanExtend(UInt_t extendBitMask);
    virtual void     SetContent(const Double_t *content);
    virtual void     SetContour(Int_t nlevels, const Double_t *levels=0);
