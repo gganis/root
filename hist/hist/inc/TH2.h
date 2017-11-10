@@ -57,6 +57,8 @@ protected:
    Int_t    Fill(Double_t); //MayNotUse
    Int_t    Fill(const char*, Double_t) { return Fill(0);}  //MayNotUse
 
+   Int_t    AutoP2FindLimits(Double_t xmin, Double_t xmax, Double_t ymin, Double_t ymax);
+
 private:
 
    TH2(const TH2&);

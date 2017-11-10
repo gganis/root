@@ -165,6 +165,52 @@ TH2::~TH2()
 {
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/// Buffer-based estimate of the histogram range using the power of 2 algorithm.
+///
+/// Used by the autobin power of 2 algorithm.
+///
+/// Works on arguments (min and max from fBuffer) and internal inputs: fXmin,
+/// fXmax, NBinsX (from fXaxis), ...
+/// Result save internally in fXaxis.
+///
+/// Overloaded by TH2 and TH3.
+///
+/// Return -1 if internal inputs are incosistent, 0 otherwise.
+///
+
+Int_t TH2::AutoP2FindLimits(Double_t xmi, Double_t xma, Double_t ymi, Double_t yma)
+{
+   // We need meaningful raw limits
+   if (xmi >= xma || ymi >= yma)
+      return -1;
+
+   THLimitsFinder::GetLimitsFinder()->FindGoodLimits(this, xmi, xma, ymi, yma);
+   Double_t xhmi = fXaxis.GetXmin();
+   Double_t xhma = fXaxis.GetXmax();
+   Double_t yhmi = fYaxis.GetXmin();
+   Double_t yhma = fYaxis.GetXmax();
+
+   // Now adjust X
+   Int_t nbx = GetNbinsX();
+   if (AutoP2FindAxisLimits(nbx, xhmi, xhma, xmi, xma) != 0) {
+      Error("AutoP2FindLimits", "problems adjusting limits on X");
+      return -1;
+   }
+   // Now adjust Y
+   Int_t nby = GetNbinsX();
+   if (AutoP2FindAxisLimits(nby, yhmi, yhma, ymi, yma) != 0) {
+      Error("AutoP2FindLimits", "problems adjusting limits on Y");
+      return -1;
+   }
+
+   // Set everything
+   SetBins(nbx, xhmi, xhma, nby, yhmi, yhma);
+
+   // Done
+   return 0;
+}
+
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Fill histogram with all entries in the buffer.
@@ -211,7 +257,14 @@ Int_t TH2::BufferEmpty(Int_t action)
          if (y > ymax) ymax = y;
       }
       if (fXaxis.GetXmax() <= fXaxis.GetXmin() || fYaxis.GetXmax() <= fYaxis.GetXmin()) {
-         THLimitsFinder::GetLimitsFinder()->FindGoodLimits(this,xmin,xmax,ymin,ymax);
+         Int_t rc = -1;
+         if (TestBit(TH1::kAutoBinPTwo)) {
+            if ((rc = AutoP2FindLimits(xmin, xmax, ymin, ymax)) < 0)
+               Warning("BufferEmpty",
+                       "incosistency found by power-of-2 autobin algorithm: fallback to standard method");
+         }
+         if (rc < 0)
+            THLimitsFinder::GetLimitsFinder()->FindGoodLimits(this, xmin, xmax, ymin, ymax);
       } else {
          fBuffer = 0;
          Int_t keep = fBufferSize; fBufferSize = 0;
