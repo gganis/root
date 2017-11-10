@@ -1280,6 +1280,7 @@ Int_t TH1::AutoP2FindLimits(Double_t xmi, Double_t xma)
    Double_t xhmi = fXaxis.GetXmin();
    Double_t xhma = fXaxis.GetXmax();
 
+#if 0
    // Now adjust
    if (TMath::Abs(xhma) > TMath::Abs(xhmi)) {
       // Start from the upper limit
@@ -1321,9 +1322,73 @@ Int_t TH1::AutoP2FindLimits(Double_t xmi, Double_t xma)
       xhmi += bw * (nblw - nbside);
       nb -= (nblw - nbside);
    }
+#else
+   // Now adjust
+   Int_t nb = GetNbinsX();
+   if (AutoP2FindAxisLimits(nb, xhmi, xhma, xmi, xma) != 0) {
+      Error("AutoP2FindLimits", "problems adjusting limits on X");
+      return -1;
+   }
+#endif
 
-   // Set everything and project
+   // Set everything
    SetBins(nb, xhmi, xhma);
+
+   // Done
+   return 0;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// Internal method to find the limits on the a single axis 
+///
+
+Int_t TH1::AutoP2FindAxisLimits(Int_t &nb, Double_t &xhmi, Double_t &xhma, Double_t xmi, Double_t xma)
+{
+   // We need meaningful raw limits and bins
+   if (xhmi >= xhma || nb < 1 || xmi >= xma)
+      return -1;
+
+   // Now adjust
+   if (TMath::Abs(xhma) > TMath::Abs(xhmi)) {
+      // Start from the upper limit
+      xhma = TH1::AutoP2GetPower2(xhma);
+      xhmi = xhma - TH1::AutoP2GetPower2(xhma - xhmi);
+   } else {
+      // Start from the lower limit
+      xhmi = TH1::AutoP2GetPower2(xhmi, kFALSE);
+      xhma = xhmi + TH1::AutoP2GetPower2(xhma - xhmi);
+   }
+
+   // Round the bins to the next power of 2; take into account the possible inflation
+   // of the range
+   Double_t rr = (xhma - xhmi) / (xma - xmi);
+   nb = TH1::AutoP2GetBins((Int_t)(rr * nb));
+
+   // Adjust using the same bin width and offsets
+   Double_t bw = (xhma - xhmi) / nb;
+   // Bins to left free on each side
+   Double_t autoside = gEnv->GetValue("Hist.Binning.Auto.Side", 0.05);
+   Int_t nbside = (Int_t)(nb * autoside);
+
+   // Side up
+   Int_t nbup = (xhma - xma) / bw;
+   if (nbup % 2 != 0)
+      nbup++; // Must be even
+   if (nbup != nbside) {
+      // Accounts also for both case: larger or smaller
+      xhma -= bw * (nbup - nbside);
+      nb -= (nbup - nbside);
+   }
+
+   // Side low
+   Int_t nblw = (xmi - xhmi) / bw;
+   if (nblw % 2 != 0)
+      nblw++; // Must be even
+   if (nblw != nbside) {
+      // Accounts also for both case: larger or smaller
+      xhmi += bw * (nblw - nbside);
+      nb -= (nblw - nbside);
+   }
 
    // Done
    return 0;

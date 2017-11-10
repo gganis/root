@@ -131,7 +131,8 @@ protected:
 
    inline static Double_t AutoP2GetPower2(Double_t x, Bool_t next = kTRUE);
    inline static Int_t AutoP2GetBins(Int_t n);
-   virtual Int_t AutoP2FindLimits(Double_t min, Double_t max);
+   Int_t AutoP2FindAxisLimits(Int_t &nb, Double_t &xhmi, Double_t &xhma, Double_t xmi, Double_t xma);
+   Int_t AutoP2FindLimits(Double_t min, Double_t max);
 
    virtual Double_t DoIntegral(Int_t ix1, Int_t ix2, Int_t iy1, Int_t iy2, Int_t iz1, Int_t iz2, Double_t & err,
                                Option_t * opt, Bool_t doerr = kFALSE) const;
