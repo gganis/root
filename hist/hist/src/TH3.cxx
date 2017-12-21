@@ -35,6 +35,52 @@ ClassImp(TH3);
 \class TH3I
 \brief 3-D histogram with an int per channel (see TH1 documentation)}
 \class TH3F
+////////////////////////////////////////////////////////////////////////////////
+/// Buffer-based estimate of the histogram range using the power of 2 algorithm.
+///
+/// Used by the autobin power of 2 algorithm.
+///
+/// Works on arguments (min and max from fBuffer) and internal inputs: fXmin,
+/// fXmax, NBinsX (from fXaxis), ...
+/// Result save internally in fXaxis.
+///
+/// Overloaded by TH2 and TH3.
+///
+/// Return -1 if internal inputs are incosistent, 0 otherwise.
+///
+
+Int_t TH2::AutoP2FindLimits(Double_t xmi, Double_t xma, Double_t ymi, Double_t yma)
+{
+   // We need meaningful raw limits
+   if (xmi >= xma || ymi >= yma)
+      return -1;
+
+   THLimitsFinder::GetLimitsFinder()->FindGoodLimits(this, xmi, xma, ymi, yma);
+   Double_t xhmi = fXaxis.GetXmin();
+   Double_t xhma = fXaxis.GetXmax();
+   Double_t yhmi = fYaxis.GetXmin();
+   Double_t yhma = fYaxis.GetXmax();
+
+   // Now adjust X
+   Int_t nbx = GetNbinsX();
+   if (AutoP2FindAxisLimits(nbx, xhmi, xhma, xmi, xma) != 0) {
+      Error("AutoP2FindLimits", "problems adjusting limits on X");
+      return -1;
+   }
+   // Now adjust Y
+   Int_t nby = GetNbinsX();
+   if (AutoP2FindAxisLimits(nby, yhmi, yhma, ymi, yma) != 0) {
+      Error("AutoP2FindLimits", "problems adjusting limits on Y");
+      return -1;
+   }
+
+   // Set everything
+   SetBins(nbx, xhmi, xhma, nby, yhmi, yhma);
+
+   // Done
+   return 0;
+}
+
 \brief 3-D histogram with a float per channel (see TH1 documentation)}
 \class TH3D
 \brief 3-D histogram with a double per channel (see TH1 documentation)}
@@ -171,6 +217,58 @@ void TH3::Copy(TObject &obj) const
    ((TH3&)obj).fTsumwyz     = fTsumwyz;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/// Buffer-based estimate of the histogram range using the power of 2 algorithm.
+///
+/// Used by the autobin power of 2 algorithm.
+///
+/// Works on arguments (min and max from fBuffer) and internal inputs: fXmin,
+/// fXmax, NBinsX (from fXaxis), ...
+/// Result save internally in fXaxis.
+///
+/// Return -1 if internal inputs are incosistent, 0 otherwise.
+///
+
+Int_t TH3::AutoP2FindLimits(Double_t xmi, Double_t xma,
+                            Double_t ymi, Double_t yma, Double_t zmi, Double_t zma)
+{
+   // We need meaningful raw limits
+   if (xmi >= xma || ymi >= yma || zmi >= zma)
+      return -1;
+
+   THLimitsFinder::GetLimitsFinder()->FindGoodLimits(this, xmi, xma, ymi, yma, zmi, zma);
+   Double_t xhmi = fXaxis.GetXmin();
+   Double_t xhma = fXaxis.GetXmax();
+   Double_t yhmi = fYaxis.GetXmin();
+   Double_t yhma = fYaxis.GetXmax();
+   Double_t zhmi = fZaxis.GetXmin();
+   Double_t zhma = fZaxis.GetXmax();
+
+   // Now adjust X
+   Int_t nbx = GetNbinsX();
+   if (AutoP2FindAxisLimits(nbx, xhmi, xhma, xmi, xma) != 0) {
+      Error("AutoP2FindLimits", "problems adjusting limits on X");
+      return -1;
+   }
+   // Now adjust Y
+   Int_t nby = GetNbinsY();
+   if (AutoP2FindAxisLimits(nby, yhmi, yhma, ymi, yma) != 0) {
+      Error("AutoP2FindLimits", "problems adjusting limits on Y");
+      return -1;
+   }
+   // Now adjust Z
+   Int_t nbz = GetNbinsZ();
+   if (AutoP2FindAxisLimits(nbz, zhmi, zhma, zmi, zma) != 0) {
+      Error("AutoP2FindLimits", "problems adjusting limits on Z");
+      return -1;
+   }
+
+   // Set everything
+   SetBins(nbx, xhmi, xhma, nby, yhmi, yhma, nbz, zhmi, zhma);
+
+   // Done
+   return 0;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 /// Fill histogram with all entries in the buffer.
@@ -661,7 +759,7 @@ Int_t TH3::Fill(Double_t x, Double_t y, const char *namez, Double_t w)
 ///
 /// N.B. By dfault this methods approximates the integral of the function in each bin with the
 ///      function value at the center of the bin, mutiplied by the bin width
-///      
+///
 ///
 ///  One can also call TF1::GetRandom to get a random variate from a function.
 
@@ -693,7 +791,7 @@ void TH3::FillRandom(const char *fname, Int_t ntimes)
    Int_t nbinsx = xAxis.GetNbins();
    Int_t nbinsy = yAxis.GetNbins();
    Int_t nbinsz = zAxis.GetNbins();
-   Int_t nxy = nbinsx*nbinsy; 
+   Int_t nxy = nbinsx*nbinsy;
    Int_t nbins  = nbinsx*nbinsy*nbinsz;
 
    Double_t *integral = new Double_t[nbins+1];
@@ -712,7 +810,7 @@ void TH3::FillRandom(const char *fname, Int_t ntimes)
             // Double_t fint = f1->Integral(xAxis.GetBinLowEdge(binx), xAxis.GetBinUpEdge(binx),
             //                              yAxis.GetBinLowEdge(biny), yAxis.GetBinUpEdge(biny),
             //                              zAxis.GetBinLowEdge(binz), zAxis.GetBinUpEdge(binz));
-            integral[ibin] = integral[ibin-1] + fint; 
+            integral[ibin] = integral[ibin-1] + fint;
          }
       }
    }
@@ -2479,7 +2577,7 @@ TProfile2D *TH3::DoProjectProfile2D(const char* name, const char * title, const 
    // Weights management
    bool useWeights = (GetSumw2N() > 0);
    // store sum of w2 in profile if histo is weighted
-   if (useWeights && (p2->GetBinSumw2()->fN != p2->GetNcells() ) ) p2->Sumw2(); 
+   if (useWeights && (p2->GetBinSumw2()->fN != p2->GetNcells() ) ) p2->Sumw2();
 
    // Set references to the bins, so that the loop has no branches.
    Int_t *refX = 0, *refY = 0, *refZ = 0;
