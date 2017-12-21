@@ -198,7 +198,7 @@ Int_t TH2::AutoP2FindLimits(Double_t xmi, Double_t xma, Double_t ymi, Double_t y
       return -1;
    }
    // Now adjust Y
-   Int_t nby = GetNbinsX();
+   Int_t nby = GetNbinsY();
    if (AutoP2FindAxisLimits(nby, yhmi, yhma, ymi, yma) != 0) {
       Error("AutoP2FindLimits", "problems adjusting limits on Y");
       return -1;
