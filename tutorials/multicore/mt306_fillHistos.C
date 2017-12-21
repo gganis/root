@@ -16,7 +16,7 @@ const Double_t xmiref = -1.;
 const Double_t xmaref = 7.;
 
 
-void mt304_1d(UInt_t nNumbers)
+void mt306_1d(UInt_t nNumbers)
 {
 
    // Histograms to be filled in parallel
@@ -70,7 +70,7 @@ void mt304_1d(UInt_t nNumbers)
 
 }
 
-void mt304_2d(UInt_t nNumbers)
+void mt306_2d(UInt_t nNumbers)
 {
 
    // Histograms to be filled in parallel
@@ -125,7 +125,7 @@ void mt304_2d(UInt_t nNumbers)
 
 }
 
-void mt304_3d(UInt_t nNumbers)
+void mt306_3d(UInt_t nNumbers)
 {
 
    // Histograms to be filled in parallel
@@ -181,7 +181,7 @@ void mt304_3d(UInt_t nNumbers)
 
 }
 
-Int_t mt304_fillHistos(UInt_t nNumbers = 1001, UInt_t opt = 1)
+Int_t mt306_fillHistos(UInt_t nNumbers = 1001, UInt_t opt = 1)
 {
 
    // The first, fundamental operation to be performed in order to make ROOT
@@ -190,13 +190,13 @@ Int_t mt304_fillHistos(UInt_t nNumbers = 1001, UInt_t opt = 1)
 
    switch(opt) {
       case 3:
-         mt304_3d(nNumbers);
+         mt306_3d(nNumbers);
          break;
       case 2:
-         mt304_2d(nNumbers);
+         mt306_2d(nNumbers);
          break;
       default:
-         mt304_1d(nNumbers);
+         mt306_1d(nNumbers);
    }
 
    gROOTMutex = 0;
