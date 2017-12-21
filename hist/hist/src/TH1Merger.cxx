@@ -175,7 +175,7 @@ Bool_t TH1Merger::AutoP2BuildAxes(TH1 *h)
    re = std::modf(range / bwmax, &rt);
    if (rt < 1.) {
       PRINTRANGE(a0, a1, h->GetName());
-      Error("MergeCompatibleHistograms", "range smaller than bin width: %f %f %f", range, bwmax, rt);
+      Error("AutoP2BuildAxes", "range smaller than bin width: %f %f %f", range, bwmax, rt);
       return kFALSE;
    }
    if (re > std::numeric_limits<Double_t>::epsilon()) {
